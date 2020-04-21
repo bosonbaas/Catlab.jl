@@ -332,9 +332,9 @@ function layout_box(inputs::Vector, outputs::Vector, opts::LayoutOptions;
 end
 
 function layout_box(::Val{:rectangle}, inputs::Vector, outputs::Vector,
-                    opts::LayoutOptions; kw...)
+                    opts::LayoutOptions; shape::Symbol=:rectangle, kw...)
   size = default_box_size(length(inputs), length(outputs), opts)
-  box = Box(BoxLayout(; shape=:rectangle, size=size, kw...),
+  box = Box(BoxLayout(; shape=shape, size=size, kw...),
             layout_linear_ports(InputPort, inputs, size, opts),
             layout_linear_ports(OutputPort, outputs, size, opts))
   size_to_fit!(singleton_diagram(box), opts)
@@ -348,6 +348,38 @@ function layout_box(::Val{:circle}, inputs::Vector, outputs::Vector,
             layout_circular_ports(InputPort, inputs, radius, opts; pad=pad),
             layout_circular_ports(OutputPort, outputs, radius, opts; pad=pad))
   size_to_fit!(singleton_diagram(box), opts)
+end
+
+function layout_box(::Val{:ellipse}, inputs::Vector, outputs::Vector,
+                    opts::LayoutOptions; pad::Bool=true, kw...)
+  size = default_box_size(length(inputs), length(outputs), opts)
+  radii = size / 2
+  box = Box(BoxLayout(; shape=:ellipse, size=size, kw...),
+            layout_elliptical_ports(InputPort, inputs, radii, opts; pad=pad),
+            layout_elliptical_ports(OutputPort, outputs, radii, opts; pad=pad))
+  size_to_fit!(singleton_diagram(box), opts)
+end
+
+function layout_box(::Val{:triangle}, inputs::Vector, outputs::Vector,
+                    opts::LayoutOptions; kw...)
+  @assert length(inputs) <= 1 "Cannot use triangle shape with multiple inputs"
+  layout_box(Val(:rectangle), inputs, outputs, opts; shape=:triangle, kw...)
+end
+function layout_box(::Val{:invtriangle}, inputs::Vector, outputs::Vector,
+                    opts::LayoutOptions; kw...)
+  @assert length(outputs) <= 1 "Cannot use invtriangle shape with multiple outputs"
+  layout_box(Val(:rectangle), inputs, outputs, opts; shape=:invtriangle, kw...)
+end
+
+# Although `trapezoid` is the standard term in North American English,
+# we use the term `trapezium` because both Graphviz and TikZ do. 
+function layout_box(::Val{:trapezium}, inputs::Vector, outputs::Vector,
+                    opts::LayoutOptions; kw...)
+  layout_box(Val(:rectangle), inputs, outputs, opts; shape=:trapezium, kw...)
+end
+function layout_box(::Val{:invtrapezium}, inputs::Vector, outputs::Vector,
+                    opts::LayoutOptions; kw...)
+  layout_box(Val(:rectangle), inputs, outputs, opts; shape=:invtrapezium, kw...)
 end
 
 function layout_box(::Val{:junction}, inputs::Vector, outputs::Vector,
@@ -404,8 +436,16 @@ end
 """ Lay out ports along a circular arc.
 """
 function layout_circular_ports(port_kind::PortKind, port_values::Vector,
-                               radius::Real, opts::LayoutOptions;
-                               pad::Bool=true, kw...)
+                               radius::Real, opts::LayoutOptions; kw...)
+  radii = SVector(radius, radius)
+  layout_elliptical_ports(port_kind, port_values, radii, opts; kw...)
+end
+
+""" Lay out ports along an elliptical arc.
+"""
+function layout_elliptical_ports(port_kind::PortKind, port_values::Vector,
+                                 radii::AbstractVector2D, opts::LayoutOptions;
+                                 pad::Bool=true, kw...)
   n = length(port_values)
   port_dir = svector(opts, port_sign(port_kind, opts.orientation), 0)
   θ1, θ2 = if port_dir == SVector(1,0); (π/2, -π/2)
@@ -414,7 +454,7 @@ function layout_circular_ports(port_kind::PortKind, port_values::Vector,
     elseif port_dir == SVector(0,-1); (π, 0) end
   θs = collect(pad ? range(θ1,θ2,length=n+2)[2:n+1] : range(θ1,θ2,length=n))
   dirs = [ SVector(cos(θ),-sin(θ)) for θ in θs ] # positive y-axis downwards
-  PortLayout[ layout_port(value, position=radius*dir, normal=dir; kw...)
+  PortLayout[ layout_port(value, position=radii .* dir, normal=dir; kw...)
               for (value, dir) in zip(port_values, dirs) ]
 end
 
@@ -550,21 +590,26 @@ merge_wire_layouts(left::WireLayout, middle::WireLayout, right::WireLayout) =
 
 """ Label for box in wiring diagram.
 """
-box_label(value) = box_label(MIME("text/plain"), value)
 box_label(mime::MIME, value) = diagram_element_label(mime, value)
 
 """ Label for wire in wiring diagram.
 
 Note: This function takes a port value, not a wire value.
 """
-wire_label(value) = wire_label(MIME("text/plain"), value)
 wire_label(mime::MIME, value) = diagram_element_label(mime, value)
 
+""" Label for element in wiring diagram.
+
+By default, both `box_label` and `wire_label` fall back to this function.
+"""
 diagram_element_label(::MIME, value) = string(value)
 diagram_element_label(::MIME, ::Nothing) = ""
 
 function diagram_element_label(::MIME"text/latex", expr::GATExpr)
-  string("\$", sprint(show_latex, expr), "\$")
+  string('$', sprint(show_latex, expr), '$')
+end
+function diagram_element_label(::MIME"text/latex", s::Union{String,Symbol})
+  string('$', s, '$')
 end
 
 end

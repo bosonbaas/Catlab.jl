@@ -1,4 +1,4 @@
-# # Wiring diagrams in Compose.jl
+# # Drawing wiring diagrams in Compose.jl
 #
 #md # [![](https://img.shields.io/badge/show-nbviewer-579ACA.svg)](@__NBVIEWER_ROOT_URL__/generated/graphics/composejl_wiring_diagrams.ipynb)
 #
@@ -130,8 +130,14 @@ to_composejl(plus(X) ⋅ mcopy(X), props=Dict(
   :variant_junction => [fill("blue"), stroke("black")],
 ))
 
+# The background color can also be changed.
+
+to_composejl(f⋅g, background_color="lightgray", props=Dict(
+  :box => [fill("white"), stroke("black")],
+))
+
 # By default, the boxes are rectangular (`:rectangle`). Other available shapes
-# include circles (`:circle`).
+# include circles (`:circle`) and ellipses (`:ellipse`).
 
 to_composejl(f⋅g, box_shape=:circle)
 

@@ -1,4 +1,4 @@
-# # Wiring diagrams in TikZ
+# # Drawing wiring diagrams in TikZ
 #
 #md # [![](https://img.shields.io/badge/show-nbviewer-579ACA.svg)](@__NBVIEWER_ROOT_URL__/generated/graphics/tikz_wiring_diagrams.ipynb)
 #
@@ -133,9 +133,20 @@ to_tikz(plus(X) ⋅ mcopy(X), styles=Dict(
 ))
 
 # By default, the boxes are rectangular (`:rectangle`). Other available shapes
-# include circles (`:circle`).
+# include circles (`:circle`), ellipses (`:ellipse`), triangles (`:triangle`,
+# `:invtriangle`), and trapezoids (`:trapezium`, `:invtrapezium`).
 
 to_tikz(f⋅g, box_shape=:circle)
+#-
+to_tikz(f⋅g, box_shape=:triangle, rounded_boxes=false)
+#-
+to_tikz(f⋅g, box_shape=:invtriangle, rounded_boxes=false)
+#-
+to_tikz(f⋅g, box_shape=:invtriangle, orientation=TopToBottom, rounded_boxes=false)
+#-
+to_tikz(f⋅g, box_shape=:trapezium)
+#-
+to_tikz(f⋅g, box_shape=:invtrapezium)
 
 # ## Output formats
 

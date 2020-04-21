@@ -5,6 +5,7 @@ export to_tikz, layout_to_tikz
 
 using Compat
 using DataStructures: OrderedDict
+using Match
 using Parameters
 
 using ...Syntax: GATExpr, show_latex
@@ -32,6 +33,7 @@ import ..TikZ
   props::AbstractVector = ["semithick"]
   styles::AbstractDict = Dict()
   libraries::Vector{String} = String[]
+  packages::Vector{String} = ["amssymb"]
   used_node_styles::AbstractSet = Set{String}()
 end
 
@@ -71,15 +73,20 @@ function layout_to_tikz(diagram::WiringDiagram, opts::TikZOptions)::TikZ.Documen
     [ TikZ.Property("$name/.style", TikZ.as_properties(props))
       for (name, props) in merge(styles, opts.styles) ];
   ]
-  libraries = unique!([ "calc"; libraries; opts.libraries ])
-  TikZ.Document(TikZ.Picture(stmts...; props=props); libraries=libraries)
+  TikZ.Document(TikZ.Picture(stmts...; props=props);
+    libraries=unique!([ "calc"; libraries; opts.libraries ]),
+    packages=opts.packages)
 end
 
 """ Make TikZ node for a box.
 """
 function tikz_box(diagram::WiringDiagram, vpath::Vector{Int}, opts::TikZOptions)
+  layout = diagram.value::BoxLayout
   TikZ.Statement[
-    tikz_node(diagram.value, opts, name=box_id(vpath), style="outer box");
+    TikZ.Node(box_id(vpath),
+      props = [TikZ.Property("outer box"); tikz_size(layout.size)],
+      coord = tikz_coordinate(layout.position),
+    );
     reduce(vcat, [ tikz_box(box(diagram, v), [vpath; v], opts)
                    for v in box_ids(diagram) ], init=[]);
     [ tikz_edge(diagram, wire, opts) for wire in wires(diagram) ];
@@ -87,21 +94,16 @@ function tikz_box(diagram::WiringDiagram, vpath::Vector{Int}, opts::TikZOptions)
 end
 
 function tikz_box(box::AbstractBox, vpath::Vector{Int}, opts::TikZOptions)
+  layout = box.value::BoxLayout
+  style = tikz_node_style(layout, opts)
   TikZ.Statement[
-    tikz_node(box.value::BoxLayout, opts; name=box_id(vpath))
+    TikZ.Node(box_id(vpath),
+      props = [TikZ.Property(style); tikz_size(layout.size)],
+      coord = tikz_coordinate(layout.position),
+      content = layout.shape in (:junction, :invisible) ? "" :
+        tikz_node_label(layout.value, opts),
+    ),
   ]
-end
-
-function tikz_node(layout::BoxLayout, opts::TikZOptions;
-    name::Union{String,Nothing}=nothing,
-    style::Union{String,Nothing}=nothing)::TikZ.Node
-  style = isnothing(style) ? tikz_node_style(layout, opts) : style
-  content = layout.shape in (:junction, :invisible) ? "" :
-    tikz_node_label(layout.value, opts)
-  TikZ.Node(name,
-    props=[TikZ.Property(style); tikz_size(layout.size)],
-    coord=tikz_coordinate(layout.position),
-    content=content)
 end
 
 """ Make a TikZ edge/path for a wire.
@@ -148,11 +150,12 @@ function tikz_port(diagram::WiringDiagram, port::Port, opts::TikZOptions)
   
   x, y = tikz_position(position(port_value(diagram, port)))
   normal_angle = tikz_angle(normal(diagram, port))
-  anchor, (x, y) = if shape == :rectangle
+  anchor, (x, y) = if shape in (:rectangle, :triangle, :invtriangle,
+                                :trapezium, :invtrapezium)
     port_dir = svector(opts, port_sign(diagram, port, opts.orientation), 0)
     e2 = svector(opts, 0, 1)
     (tikz_anchor(port_dir), (e2[1]*x, e2[2]*y))
-  elseif shape in (:circle, :junction)
+  elseif shape in (:circle, :ellipse, :junction)
     (normal_angle, (0,0))
   elseif shape == :invisible
     ("center", (0,0))
@@ -171,10 +174,32 @@ function tikz_port(diagram::WiringDiagram, port::Port, opts::TikZOptions)
 end
 
 function tikz_node_label(value, opts::TikZOptions)
-  box_label(MIME(opts.math_mode ? "text/latex" : "text/plain"), value)
+  if opts.math_mode
+    box_label(MIME("text/latex"), value)
+  else
+    escape_latex(box_label(MIME("text/plain"), value))
+  end
 end
 function tikz_edge_label(value, opts::TikZOptions)
-  wire_label(MIME(opts.math_mode ? "text/latex" : "text/plain"), value)
+  if opts.math_mode
+    wire_label(MIME("text/latex"), value)
+  else
+    escape_latex(wire_label(MIME("text/plain"), value))
+  end
+end
+
+""" Escape special LaTeX characters.
+
+Reference: https://tex.stackexchange.com/a/34586/
+"""
+function escape_latex(s::AbstractString)
+  reduce(replace, [
+    "\\" => "\\textbackslash",
+    "~" => "\\textasciitilde",
+    "^" => "\\textasciicircum",
+    "&" => "\\&", "%" => "\\%", "\$" => "\\\$", "#" => "\\#",
+    "_" => "\\_", "{" => "\\{", "}" => "\\}",
+  ], init=s)
 end
 
 # TikZ geometry
@@ -232,17 +257,9 @@ end
 """
 function tikz_styles(opts::TikZOptions)
   # Box style options.
-  styles = OrderedDict(
-    style => copy(default_tikz_node_styles[style])
-    for style in sort!(["outer box"; collect(opts.used_node_styles)])
-    if haskey(default_tikz_node_styles, style)
-  )
-  libraries = String[]
-  if opts.rounded_boxes
-    if haskey(styles, "box")
-      push!(styles["box"], TikZ.Property("rounded corners"))
-    end
-  end
+  used = sort!(["outer box"; collect(opts.used_node_styles)])
+  styles = OrderedDict(style => tikz_node_style(opts, style) for style in used)
+  libraries = [ "shapes.geometric" ] # FIXME: Should use library only if needed.
   
   # Wire style options.
   styles["wire"] = [ TikZ.Property("draw") ]
@@ -269,33 +286,94 @@ function tikz_styles(opts::TikZOptions)
   (styles, libraries)
 end
 
-const default_tikz_node_styles = Dict{String,Vector{TikZ.Property}}(
-  "outer box" => [
-    TikZ.Property("draw", "none"),
-  ],
-  "box" => [
-    TikZ.Property("rectangle"),
-    TikZ.Property("draw"), TikZ.Property("solid"),
-  ],
-  "circular box" => [
-    TikZ.Property("circle"),
-    TikZ.Property("draw"), TikZ.Property("solid"),
-  ],
-  "junction" => [
-    TikZ.Property("circle"),
-    TikZ.Property("draw"), TikZ.Property("fill"),
-    TikZ.Property("inner sep", "0"),
-  ],
-  "variant junction" => [
-    TikZ.Property("circle"),
-    TikZ.Property("draw"), TikZ.Property("solid"),
-    TikZ.Property("inner sep", "0"),
-  ],
-  "invisible" => [
-    TikZ.Property("draw", "none"),
-    TikZ.Property("inner sep", "0"),
-  ],
-)
+""" Get default TikZ style for given kind of node.
+"""
+function tikz_node_style(opts::TikZOptions, name::String)
+  rounded = TikZ.Property(opts.rounded_boxes ? "rounded corners" : "sharp corners")
+  @match name begin
+    "outer box" => [
+      TikZ.Property("draw", "none"),
+    ]
+    "box" => [
+      TikZ.Property("rectangle"),
+      TikZ.Property("draw"), TikZ.Property("solid"), rounded,
+    ]
+    "circular box" => [
+      TikZ.Property("circle"),
+      TikZ.Property("draw"), TikZ.Property("solid"),
+    ]
+    "elliptical box" => [
+      TikZ.Property("ellipse"),
+      TikZ.Property("draw"), TikZ.Property("solid"),
+    ]
+    "triangular box" => [
+      TikZ.Property("isosceles triangle"),
+      TikZ.Property("isosceles triangle stretches"),
+      TikZ.Property("shape border rotate", Dict(
+        # FIXME: Match.jl doesn't work with enums.
+          LeftToRight => "180",
+          RightToLeft => "0",
+          TopToBottom => "90",
+          BottomToTop => "270",
+        )[opts.orientation]
+      ),
+      TikZ.Property("draw"), TikZ.Property("solid"), rounded,
+      TikZ.Property("inner sep", "0"),
+    ]
+    "inverse triangular box" => [
+      TikZ.Property("isosceles triangle"),
+      TikZ.Property("isosceles triangle stretches"),
+      TikZ.Property("shape border rotate", Dict(
+          LeftToRight => "0",
+          RightToLeft => "180",
+          TopToBottom => "270",
+          BottomToTop => "90",
+        )[opts.orientation]
+      ),
+      TikZ.Property("draw"), TikZ.Property("solid"), rounded,
+      TikZ.Property("inner sep", "0"),
+    ]
+    "trapezoidal box" => [
+      TikZ.Property("trapezium"), TikZ.Property("trapezium angle", "80"),
+      TikZ.Property("trapezium stretches body"),
+      TikZ.Property("shape border rotate", Dict(
+          LeftToRight => "90",
+          RightToLeft => "270",
+          TopToBottom => "0",
+          BottomToTop => "180",
+        )[opts.orientation]
+      ),
+      TikZ.Property("draw"), TikZ.Property("solid"), rounded,
+    ]
+    "inverse trapezoidal box" => [
+      TikZ.Property("trapezium"), TikZ.Property("trapezium angle", "80"),
+      TikZ.Property("trapezium stretches body"),
+      TikZ.Property("shape border rotate", Dict(
+          LeftToRight => "270",
+          RightToLeft => "90",
+          TopToBottom => "180",
+          BottomToTop => "0",
+        )[opts.orientation]
+      ),
+      TikZ.Property("draw"), TikZ.Property("solid"), rounded,
+    ]
+    "junction" => [
+      TikZ.Property("circle"),
+      TikZ.Property("draw"), TikZ.Property("fill"),
+      TikZ.Property("inner sep", "0"),
+    ]
+    "variant junction" => [
+      TikZ.Property("circle"),
+      TikZ.Property("draw"), TikZ.Property("solid"),
+      TikZ.Property("inner sep", "0"),
+    ]
+    "invisible" => [
+      TikZ.Property("draw", "none"),
+      TikZ.Property("inner sep", "0"),
+    ]
+    _ => TikZ.Property[]
+  end
+end
 
 function tikz_decorate_markings(marks::Vector{TikZ.Property})
   [ TikZ.Property("postaction", [ TikZ.Property("decorate") ]),
@@ -320,6 +398,11 @@ end
 const tikz_shapes = Dict(
   :rectangle => "box",
   :circle => "circular box",
+  :ellipse => "elliptical box",
+  :triangle => "triangular box",
+  :invtriangle => "inverse triangular box",
+  :trapezium => "trapezoidal box",
+  :invtrapezium => "inverse trapezoidal box",
   :junction => "junction",
   :invisible => "invisible",
 )

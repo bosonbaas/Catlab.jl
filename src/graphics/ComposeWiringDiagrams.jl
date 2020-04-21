@@ -41,8 +41,10 @@ const ComposeProperties = AbstractVector{<:Compose.Property}
 """ Internal data type for configurable options of Compose.jl wiring diagrams.
 """
 @with_kw_noshow struct ComposeOptions
+  base_unit::Compose.Measure = 4*C.mm
   props::AbstractDict = Dict()
   box_renderer::Function = render_box
+  background_color::Union{AbstractString,C.Colorant,Nothing} = nothing
   rounded_boxes::Bool = true
 end
 
@@ -51,24 +53,29 @@ end
 
 """ Draw a wiring diagram in Compose.jl.
 """
-function to_composejl(args...;
-    base_unit::Compose.Measure = 4*C.mm, kw...)::ComposePicture
+function to_composejl(args...; kw...)::ComposePicture
   layout_kw = filter(p -> first(p) ∉ fieldnames(ComposeOptions), kw)
   diagram = layout_diagram(args...; layout_kw...)
   
   compose_kw = filter(p -> first(p) ∈ fieldnames(ComposeOptions), kw)
-  context = layout_to_composejl(diagram; compose_kw...)
-  ComposePicture(context, (base_unit .* size(diagram))...)
+  layout_to_composejl(diagram; compose_kw...)
 end
 
 """ Draw a wiring diagram in Compose.jl using the given layout.
 """
-function layout_to_composejl(diagram::WiringDiagram; props=Dict(), kw...)::Compose.Context
+function layout_to_composejl(diagram::WiringDiagram; props=Dict(), kw...)
   props = merge(default_props, props)
-  layout_to_composejl(diagram, ComposeOptions(; props=props, kw...))
+  opts = ComposeOptions(; props=props, kw...)
+  context = layout_to_context(diagram, opts)
+  if !isnothing(opts.background_color)
+    context = C.compose(C.context(),
+      context,
+      (C.context(), C.rectangle(), C.fill(opts.background_color)))
+  end
+  ComposePicture(context, (opts.base_unit .* size(diagram))...)
 end
 
-function layout_to_composejl(diagram::WiringDiagram, opts::ComposeOptions)
+function layout_to_context(diagram::WiringDiagram, opts::ComposeOptions)
   # The origin of the Compose.jl coordinate system is in the top-left corner,
   # while the origin of wiring diagram layout is at the diagram center, so we
   # need to translate the coordinates using the `UnitBox`.
@@ -76,25 +83,25 @@ function layout_to_composejl(diagram::WiringDiagram, opts::ComposeOptions)
   C.compose(C.context(units=units, tag=:diagram),
     C.compose(C.context(tag=:boxes),
       map(boxes(diagram)) do box
-        layout_to_composejl(box, opts)
+        layout_to_context(box, opts)
       end...
     ),
     C.compose(C.context(tag=:wires),
       map(wires(diagram)) do wire
-        layout_to_composejl(diagram, wire, opts)
+        layout_to_context(diagram, wire, opts)
       end...
     ),
   )
 end
 
-function layout_to_composejl(box::Box, opts::ComposeOptions)::Compose.Context
+function layout_to_context(box::Box, opts::ComposeOptions)
   C.compose(C.context(lower_corner(box)..., size(box)...,
                       units=C.UnitBox(), tag=:box),
     opts.box_renderer(box.value, opts)
   )
 end
 
-function layout_to_composejl(diagram::WiringDiagram, wire::Wire, opts::ComposeOptions)
+function layout_to_context(diagram::WiringDiagram, wire::Wire, opts::ComposeOptions)
   src, tgt = wire.source, wire.target
   src_pos, tgt_pos = position(diagram, src), position(diagram, tgt)
   points = [ src_pos ]
@@ -128,17 +135,21 @@ function render_box(layout::BoxLayout, opts::ComposeOptions)
   render_box(Val(layout.shape), layout, opts)
 end
 function render_box(::Val{:rectangle}, layout::BoxLayout, opts::ComposeOptions)
-  labeled_rectangle(box_label(layout.value), rounded=opts.rounded_boxes,
-    rectangle_props=box_props(layout, opts), text_props=opts.props[:text])
+  form = opts.rounded_boxes ? rounded_rectangle() : C.rectangle()
+  labeled_box(form, layout, opts)
 end
-function render_box(::Val{:circle}, layout::BoxLayout, opts::ComposeOptions)
-  labeled_circle(box_label(layout.value),
-    circle_props=box_props(layout, opts), text_props=opts.props[:text])
-end
-function render_box(::Val{:junction}, layout::BoxLayout, opts::ComposeOptions)
+render_box(::Val{:circle}, layout::BoxLayout, opts::ComposeOptions) =
+  labeled_box(C.circle(), layout, opts)
+render_box(::Val{:ellipse}, layout::BoxLayout, opts::ComposeOptions) =
+  labeled_box(C.ellipse(), layout, opts)
+render_box(::Val{:junction}, layout::BoxLayout, opts::ComposeOptions) =
   C.compose(C.context(), C.circle(), box_props(layout, opts)...)
-end
 render_box(::Val{:invisible}, ::BoxLayout, ::ComposeOptions) = C.context()
+
+function labeled_box(form::C.ComposeNode, layout::BoxLayout, opts::ComposeOptions)
+  labeled_form(form, box_label(MIME("text/plain"), layout.value),
+    form_props=box_props(layout, opts), text_props=opts.props[:text])
+end
 
 """ Get Compose.jl properties for box.
 """
@@ -154,26 +165,12 @@ end
 # Compose.jl forms
 ##################
 
-""" Draw a circle with text label in Compose.
+""" Draw a form with centered text label in Compose.
 """
-function labeled_circle(label::String;
-    circle_props::ComposeProperties=[], text_props::ComposeProperties=[])
+function labeled_form(form::C.ComposeNode, label::String; rounded::Bool=true,
+    form_props::ComposeProperties=[], text_props::ComposeProperties=[])
   C.compose(C.context(),
-    (C.context(order=1), C.circle(), circle_props...),
-    (C.context(order=2),
-     C.text(0.5, 0.5, label, C.hcenter, C.vcenter),
-     text_props...),
-  )
-end
-
-""" Draw a rectangle with text label in Compose.
-"""
-function labeled_rectangle(label::String; rounded::Bool=true,
-    rectangle_props::ComposeProperties=[], text_props::ComposeProperties=[])
-  C.compose(C.context(),
-    (C.context(order=1),
-     rounded ? rounded_rectangle() : C.rectangle(),
-     rectangle_props...),
+    (C.context(order=1), form, form_props...),
     (C.context(order=2),
      C.text(0.5, 0.5, label, C.hcenter, C.vcenter),
      text_props...),
