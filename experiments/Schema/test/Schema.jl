@@ -11,9 +11,9 @@ mat_t = SchemaDom(["Matrix"])
 model_t = SchemaDom(["Model"])
 prob_t = SchemaDom(["Probability"])
 
-extr_t = FKTable(rec_t, otimes(mat_t, vec_t), "Extract")
-fit_t = FKTable(otimes(mat_t, vec_t), otimes(vec_t, model_t), "Fit")
-eval_t = FKTable(otimes(vec_t, vec_t), prob_t, "Evaluate")
+extr_t = Table(rec_t, otimes(mat_t, vec_t), "Extract")
+fit_t = Table(otimes(mat_t, vec_t), otimes(vec_t, model_t), "Fit")
+eval_t = Table(otimes(vec_t, vec_t), prob_t, "Evaluate")
 
 d = Dict(records => rec_t,
          vec => vec_t,
@@ -24,7 +24,7 @@ d = Dict(records => rec_t,
          fit => fit_t,
          evaluate => eval_t)
 
-F(ex) = functor((SchemaDom, FKTable), ex, generators=d)
+F(ex) = functor((SchemaDom, Table), ex, generators=d)
 
 M = extract⋅(id(mat)⊗Δ(vec))⋅(fit⊗id(vec))⋅(σ(vec,model)⊗id(vec))⋅(◊(model)⊗evaluate)
 
