@@ -49,7 +49,7 @@ module Schema
 
     id(A::SchemaDom)    = Table(A,A, "Identity")
     compose(f::Table,g::Table) = 
-    Table(f.dom, g.codom, union(f.types, g.types), join_tables(f,g), "comp") 
+      Table(f.dom, g.codom, union(f.types, g.types), join_tables(f,g), "comp") 
 
     otimes(A::SchemaDom, B::SchemaDom) = SchemaDom(vcat(A.types, B.types))
     otimes(f::Table, g::Table)  = 
