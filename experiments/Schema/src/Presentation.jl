@@ -1,4 +1,5 @@
 module Presentation
+export Schema, TypeToSql, sql
 using Catlab
 using Catlab.Doctrines
 using Catlab.Present
@@ -44,27 +45,4 @@ sql(s::Schema) = begin
     end
     return primitives, tables
 end
-
-# here is an example
-Name = Ob(FreeCartesianCategory, (:full_name, (first=String, last=String)))
-Person = Ob(FreeCartesianCategory, (:person, (id=Int,)))
-X = Ob(FreeCartesianCategory, Int)
-F = Ob(FreeCartesianCategory, Float64)
-ID = Ob(FreeCartesianCategory, (:ID, (id=Int,)))
-
-name = Hom((name=:names, fields=(:person, :full_name)), Person, Name)
-emply = Hom((name=:eployees, fields=(:person, :ID)), Person, ID)
-manag = Hom((name=:manager, fields=(:person, :manager)), Person, Person)
-salry = Hom((name=:salary, fields=(:person, :salary)), Person, F)
-
-types = [Name, Person, X,F,ID]
-rels = [name, emply, manag, salry]
-
-prim, tab = sql(Schema(types, rels))
-@show prim
-@show tab
-
-# get the salary of a person's manager
-# query(manag⋅salry) == "select (manager.id, salary.salary) from manager join salary on manager.manager == salary.id"
-
 end
