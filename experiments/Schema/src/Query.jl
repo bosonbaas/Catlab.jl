@@ -69,7 +69,7 @@ module QueryLib
     end
 
     meet(f::Query, g::Query) = begin
-      Query(f.dom, f.codom, f.dom_names, f.codom_names, f.query*"\nINTERSECTION\n"*g.query, "DEFINED")
+      Query(f.dom, f.codom, f.dom_names, f.codom_names, f.query*"\nINTERSECT\n"*g.query, "DEFINED")
     end
 
     dagger(f::Query) = Query(f.codom, f.dom, f.codom_names, f.dom_names, f.query, f.type)
