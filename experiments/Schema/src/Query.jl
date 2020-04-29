@@ -15,6 +15,8 @@ module QueryLib
   import Schema.Presentation: Schema, TypeToSql
 
   @auto_hash_equals struct Types
+    type_query::String
+    col_names::Array{String,1}
     types::Array{String,1}
   end
 
@@ -26,6 +28,27 @@ module QueryLib
     query::String
     type::String
   end
+
+  # Auto-Generate type_query
+  Types(types::Array{String,1}) = begin
+    type_fields = join(map(enumerate(types)) do (i,a)
+                         "$(a)_t AS $(Char(64 + i))"
+                       end,',')
+    type_cols = join(map(enumerate(types)) do (i,a)
+                       field = Char(64 + i)
+                       "$field.uid AS uid_$i"
+                     end, ",")
+
+    col_names = map(enumerate(types)) do (i,a)
+      field = Char(64 + i)
+      "uid_$i"
+    end
+
+    Types("SELECT $type_cols FROM $type_fields", types)
+  end
+
+  # Generate from single type
+  Types(type::String) = Types([type])
 
   @syntax FreeBicategoryRelationsMeet(ObExpr,HomExpr) BicategoryRelations begin
     otimes(A::Ob, B::Ob) = associate_unit(new(A,B), munit)
@@ -95,9 +118,12 @@ module QueryLib
     end
 
     mcopy(A::Types) = begin
-      throw(MethodError("mcopy is not implemented"))
+      dom = A
+      codom = otimes(A,A)
+      #dom_names =
+      Types(vcat(A.types, A.types, A.types)).query
     end
-    
+
     mmerge(A::Types) = begin
       throw(MethodError("mmerge is not implemented"))
     end
