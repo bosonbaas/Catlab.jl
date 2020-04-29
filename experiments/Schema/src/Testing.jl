@@ -4,11 +4,11 @@ using Schema.QueryLib, Schema.Presentation
 import Schema.Presentation: Schema, sql
 
 # Define the Types
-Name = Ob(FreeBicategoryRelations, (:full_name, (first=String, last=String)))
-Person = Ob(FreeBicategoryRelations, (:person, (id=Int,)))
-X = Ob(FreeBicategoryRelations, Int)
-F = Ob(FreeBicategoryRelations, Float64)
-ID = Ob(FreeBicategoryRelations, (:ID, (id=Int,)))
+Name = Ob(FreeBicategoryRelationsMeet, (:full_name, (first=String, last=String)))
+Person = Ob(FreeBicategoryRelationsMeet, (:person, (id=Int,)))
+X = Ob(FreeBicategoryRelationsMeet, Int)
+F = Ob(FreeBicategoryRelationsMeet, Float64)
+ID = Ob(FreeBicategoryRelationsMeet, (:ID, (id=Int,)))
 
 # Define the relationships
 name = Hom((name=:names, fields=("person", "full_name")), Person, Name)
@@ -26,7 +26,7 @@ prim, tab = sql(Schema(types, rels))
 @show tab
 
 # Generate and display a query to get (names, salaries)
-println(make_query(Schema(types, rels), (dagger(name⊗manag)⋅(salry⊗name))))
+println(make_query(Schema(types, rels), meet(dagger(emply)⋅name, dagger(emply)⋅dagger(manag)⋅name)))
 
 # get the salary of a person's manager
 # query(manag⋅salry) == "select (manager.id, salary.salary) from manager join salary on manager.manager == salary.id"

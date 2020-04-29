@@ -1,15 +1,15 @@
 module QueryLib
 
-  export Types, Query, make_query,
+  export Types, Query, make_query, FreeBicategoryRelationsMeet,
     Ob, Hom, dom, codom, compose, ⋅, ∘, id, otimes, ⊗, munit, braid, σ,
-    dagger, dunit, dcounit, mcopy, Δ, delete, ◊, mmerge, ∇, create, □
-#    plus, zero, coplus, cozero, meet, top, join, bottom
+    dagger, dunit, dcounit, mcopy, Δ, delete, ◊, mmerge, ∇, create, □,
+    meet, top#, plus, zero, coplus, cozero,  join, bottom
 
   using Catlab, Catlab.Doctrines, Catlab.Present
   import Catlab.Doctrines:
     Ob, Hom, dom, codom, compose, ⋅, ∘, id, otimes, ⊗, munit, braid, σ,
     dagger, dunit, dcounit, mcopy, Δ, delete, ◊, mmerge, ∇, create, □,
-    plus, zero, coplus, cozero, meet, top, join, bottom
+    plus, zero, coplus, cozero, meet, top, join, bottom, distribute_dagger
 
   using AutoHashEquals
   import Schema.Presentation: Schema, TypeToSql
@@ -25,6 +25,14 @@ module QueryLib
     codom_names::Array{String,1}
     query::String
     type::String
+  end
+
+  @syntax FreeBicategoryRelationsMeet(ObExpr,HomExpr) BicategoryRelations begin
+    otimes(A::Ob, B::Ob) = associate_unit(new(A,B), munit)
+    otimes(f::Hom, g::Hom) = associate(new(f,g))
+    compose(f::Hom, g::Hom) = associate(new(f,g; strict=true))
+    dagger(f::Hom) = distribute_unary(distribute_dagger(involute(new(f))),
+                                      dagger, otimes)
   end
 
   @instance BicategoryRelations(Types, Query) begin
@@ -53,7 +61,7 @@ module QueryLib
       append(x)   = (w) -> w*x
       alias(e)    = (w) -> w*" AS "*w*e
       Query(otimes(f.dom, g.dom), otimes(f.codom,g.codom),
-            vcat(append("_top").(f.dom_names), append("_bot").(g.dom_names)), 
+            vcat(append("_top").(f.dom_names), append("_bot").(g.dom_names)),
             vcat(append("_top").(f.codom_names), append("_bot").(g.codom_names)),
             "SELECT $(join(prepend("A.").(alias("_top").(vcat(f.dom_names,f.codom_names))),",")),
                     $(join(prepend("B.").(alias("_bot").(vcat(g.dom_names,g.codom_names))),","))\n
