@@ -26,7 +26,7 @@ prim, tab = sql(Schema(types, rels))
 @show tab
 
 # Generate and display a query to get (names, salaries)
-println(make_query(Schema(types, rels), dagger(name)⋅manag⋅salry))
+println(make_query(Schema(types, rels), (dagger(name⊗manag)⋅(salry⊗name))))
 
 # get the salary of a person's manager
 # query(manag⋅salry) == "select (manager.id, salary.salary) from manager join salary on manager.manager == salary.id"

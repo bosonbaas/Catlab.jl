@@ -42,21 +42,22 @@ module QueryLib
       conditions =  join(map(1:length(f.codom.types)) do i
                       "A.$(f.codom_names[i])=B.$(g.dom_names[i])"
                     end,
-                    " OR\n")
+                    " AND\n")
 
       Query(f.dom, g.codom, f.dom_names, g.codom_names, new_query*conditions, "DEFINED")
     end
 
-    otimes(A::Types, B::Types) = vcat(A,B)
+    otimes(A::Types, B::Types) = Types(vcat(A.types,B.types))
     otimes(f::Query, g::Query) = begin
-      prepend(x) = (w) -> x*w
-      alias(e) = (w) -> w*" AS "*w*e
+      prepend(x)  = (w) -> x*w
+      append(x)   = (w) -> w*x
+      alias(e)    = (w) -> w*" AS "*w*e
       Query(otimes(f.dom, g.dom), otimes(f.codom,g.codom),
-            vcat(alias("_top").(f.dom_names), alias("_bot").(g.dom_names)), 
-            vcat(alias("_top").(f.codom_names), alias("_bot").(g.codom_names)),
-            "SELECT $(join(alias("_top").(prepend("A.").(vcat(f.dom.names,f.codom.names))),",")),
-                    $(join(alias("_bot").(prepend("B.").(vcat(g.dom.names,g.codom.names))),","))\n
-                    FROM ($(f.query)) AS A,($(g.query)) AS B;")
+            vcat(append("_top").(f.dom_names), append("_bot").(g.dom_names)), 
+            vcat(append("_top").(f.codom_names), append("_bot").(g.codom_names)),
+            "SELECT $(join(prepend("A.").(alias("_top").(vcat(f.dom_names,f.codom_names))),",")),
+                    $(join(prepend("B.").(alias("_bot").(vcat(g.dom_names,g.codom_names))),","))\n
+                    FROM ($(f.query)) AS A,($(g.query)) AS B", "DEFINED")
     end
 
     meet(f::Query, g::Query) = begin
