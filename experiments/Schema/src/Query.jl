@@ -15,52 +15,68 @@ module QueryLib
   import Schema.Presentation: Schema, TypeToSql
 
   struct Types
-    type_query::String
-    uid_names::Array{String,1}
-    val_names::Array{String,1}
-    types::Array{String,1}
+    type_query::String          # Query to get all possible values of this type
+    uid_names::Array{String,1}  # Column names for UIDs of data types
+    val_names::Array{String,1}  # Column names for values of data types
+    types::Array{String,1}      # Data types stored
   end
+
+  # Need to define Type's functions since the only domain-equality concern is
+  # "types"
   Base.hash(a::Types, h::UInt) = hash(a.b, hash(a.a, hash(:Types, h)))
   Base.:(==)(a::Types, b::Types) = a.types == b.types
 
   struct Query
-    dom::Types
-    codom::Types
-    dom_names::Array{String,1}
-    codom_names::Array{String,1}
-    query::String
+    dom::Types    # Types of the domain
+    codom::Types  # Types of the codomain
+    dom_names::Array{String,1}    # Column names for domain
+    codom_names::Array{String,1}  # Column names for codomain
+    query::String # Query which generates this table
   end
 
-  # Auto-Generate type_query
+  # Generate Type object from type-array
   Types(types::Array{String,1}) = begin
-    type_fields = join(map(enumerate(types)) do (i,a)
-                         "$(a)_t AS $(Char(64 + i))"
-                       end,',')
+
+    # Define the SELECT section of the query
     type_cols = join(map(enumerate(types)) do (i,a)
                        field = Char(64 + i)
                        "$field.uid AS uid_$(a)_$i, $field.value as value_$(a)_$i"
                      end, ",")
 
+    # Define the FROM section of the query
+    type_fields = join(map(enumerate(types)) do (i,a)
+                         "$(a)_t AS $(Char(64 + i))"
+                       end,',')
+
+    # Generate uid column names
     uid_names = map(enumerate(types)) do (i,a)
       field = Char(64 + i)
       "uid_$(a)_$i"
     end
 
+    # Generate value column names
     val_names = map(enumerate(types)) do (i,a)
       field = Char(64 + i)
       "value_$(a)_$i"
     end
 
+    # Create the type
     Types("SELECT $type_cols FROM $type_fields", uid_names, val_names, types)
   end
 
   # Generate from single type
   Types(type::String) = Types([type])
 
+  # Make every element of the array unique by appending ":X" with X as some digit
+  # This is necessary to prevent namespace collisions between columns
   uniquify(a::Array{String,1}) = begin
+
     a_n = Array{String,1}()
+    # Fill a_n with unique values
     for i in 1:length(a)
       cur_val = a[i]
+
+      # Iterate the digit until the value is unique
       while cur_val in a_n
         if occursin(":", cur_val)
           cur_val = replace(cur_val, r":\d*$" => (c) -> ":"*string(parse(Int, c[2:end])+1))
@@ -80,21 +96,23 @@ module QueryLib
     munit(::Type{Types}) = Types(Array{String, 1}())
 
     compose(f::Query, g::Query) = begin
-      prepend(x) = (w) -> x*w
+      prepend(x) = (w) -> x*w # This is necessary for adding query aliasses to
+                              # column names
 
+      # Generate unique domain and codomain names
       unique_names = uniquify(vcat(f.dom_names, g.codom_names))
       dom_names = unique_names[1:length(f.dom_names)]
       codom_names = unique_names[(length(f.dom_names)+1):end]
 
-
+      # Generate select statements, aliasing to the new unique names
       select_dom = prepend("A.").(f.dom_names.*" AS ".*dom_names)
       select_codom = prepend("B.").(g.codom_names.*" AS ".*codom_names)
 
-      @show select_dom
-      @show select_codom
+      # Combine the query
       new_query = "SELECT $(join(vcat(select_dom, select_codom),",\n"))\n"*
                   "FROM ($(f.query)) AS A\n INNER JOIN ($(g.query)) AS B ON\n"
 
+      # Define the joining conditions
       conditions =  join(map(1:length(f.codom.types)) do i
                       "A.$(f.codom_names[i])=B.$(g.dom_names[i])"
                     end,
@@ -105,6 +123,7 @@ module QueryLib
 
     otimes(A::Types, B::Types) = Types(vcat(A.types,B.types))
     otimes(f::Query, g::Query) = begin
+      # These help with generating aliases and ensuring field uniqueness
       prepend(x)  = (w) -> x*w
       append(x)   = (w) -> w*x
       alias(e)    = (w) -> w*" AS "*w*e
@@ -112,14 +131,18 @@ module QueryLib
       select_dom    = prepend("A.").(alias("_top").(vcat(f.dom_names,f.codom_names)))
       select_codom  = prepend("B.").(alias("_bot").(vcat(g.dom_names,g.codom_names)))
 
+      new_query = "SELECT $(join(vcat(select_dom, select_codom),",\n"))\n"*
+                  "       FROM ($(f.query)) AS A,($(g.query)) AS B"
+
+      # Generate the query
       Query(otimes(f.dom, g.dom), otimes(f.codom,g.codom),
             vcat(append("_top").(f.dom_names), append("_bot").(g.dom_names)),
             vcat(append("_top").(f.codom_names), append("_bot").(g.codom_names)),
-            "SELECT $(join(vcat(select_dom, select_codom),",\n"))\n"*
-            "       FROM ($(f.query)) AS A,($(g.query)) AS B")
+            new_query)
     end
 
     meet(f::Query, g::Query) = begin
+      # This is a shortcut compared to the formula from mcopy and mmerge
       Query(f.dom, f.codom, f.dom_names, f.codom_names, f.query*"\nINTERSECT\n"*g.query)
     end
 
