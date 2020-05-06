@@ -150,6 +150,8 @@ module QueryLib
 
     id(A::Types) = begin
 
+      # Define unique names so that the domain and codomain of id don't
+      # interfere
       unique_names = uniquify(vcat(A.uid_names, A.uid_names))
       dom_names = unique_names[1:length(A.uid_names)]
       codom_names = unique_names[(length(A.uid_names)+1):end]
@@ -162,6 +164,7 @@ module QueryLib
     end
 
     braid(A::Types, B::Types) = begin
+      # Use id and swap the A and B fields
       id_ab = id(otimes(A,B))
       Query(otimes(A,B),otimes(B,A),
             id_ab.dom_names,
@@ -171,6 +174,8 @@ module QueryLib
     end
 
     mcopy(A::Types) = begin
+      # Create with 3 equivalent columns of type A and split them to domain and
+      # range
       dom = A
       codom = otimes(A,A)
 
@@ -193,14 +198,6 @@ module QueryLib
       dagger(create(A))
     end
 
-    encode(A::Types) = begin
-      Query(Types(fill("text",length(A.types))), A, A.val_names, A.uid_names, A.type_query)
-    end
-
-    decode(A::Types) = begin
-      dagger(encode(A))
-    end
-
     dunit(A::Types) = begin
       compose(create(A), mcopy(A))
     end
@@ -211,6 +208,15 @@ module QueryLib
 
     top(A::Types, B::Types) = begin
       compose(delete(A),create(B))
+    end
+
+    # Encode and decode are helper functions to retrieve actual values
+    encode(A::Types) = begin
+      Query(Types(fill("text",length(A.types))), A, A.val_names, A.uid_names, A.type_query)
+    end
+
+    decode(A::Types) = begin
+      dagger(encode(A))
     end
   end
 

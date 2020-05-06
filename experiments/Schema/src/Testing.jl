@@ -23,9 +23,12 @@ rels = [names, employees, customers, manag, salry]
 
 # Generate the Schema
 prim, tab = sql(Schema(types, rels))
-@show prim
-@show tab
+println("Copy the following to generate the schema:")
+println(join(prim, " "))
+println(join(tab, " "))
 
 # Generate and display a query to get (names, salaries)
 formula = create(Person)⋅employees #dunit(Person)⋅(employees⊗customers)⋅mmerge(ID)
+
+println("\n\nCopy this for the query: ")
 println(make_query(Schema(types, rels), formula))
