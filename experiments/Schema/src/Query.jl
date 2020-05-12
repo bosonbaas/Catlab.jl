@@ -16,6 +16,7 @@ module QueryLib
 
   @auto_hash_equals struct Types
     types::Array{String,1}
+    sub_fields::Array{Array{String,1},1}
   end
 
   struct Query
@@ -61,7 +62,7 @@ module QueryLib
 
     dom(f::Query)   = f.dom
     codom(f::Query) = f.codom
-    munit(::Type{Types}) = Types(Array{String, 1}())
+    munit(::Type{Types}) = Types(Array{String, 1}(), Array{Array{String, 1},1}())
 
     compose(f::Query, g::Query) = begin
 
@@ -90,7 +91,7 @@ module QueryLib
       Query(f.dom, g.codom, dom_names, codom_names, new_query*conditions, "DEFINED")
     end
 
-    otimes(A::Types, B::Types) = Types(vcat(A.types,B.types))
+    otimes(A::Types, B::Types) = Types(vcat(A.types,B.types), vcat(A.sub_fields,B.sub_fields))
     otimes(f::Query, g::Query) = begin
       prepend(x)  = (w) -> x*w
       append(x)   = (w) -> w*x
@@ -174,25 +175,36 @@ module QueryLib
   end
 
   make_query(s::Schema, q::GATExpr)::Query = begin
+    type_to_field = Dict{String,Types}()
     q_types = map(s.types) do t
       if typeof(t.args[1]) <: DataType
-        return Types([TypeToSql[t.args[1]]])
+        type = TypeToSql[t.args[1]]
+        type_to_field[type] = Types([type], [Array{String,1}()])
+        return type_to_field[type]
       end
-      return Types([string(t.args[1][1])])
+      components = t.args[1][2]
+      type = string(t.args[1][1])
+      fields = [TypeToSql[components[k]] for k in keys(components)]
+      type_to_field[type] = Types([type], [fields])
+      return type_to_field[type]
     end
     q_homs = map(s.relations) do t
       # Get the dom type and name
       dom_name    = [t.args[1].fields[1]]
       codom_name  = [t.args[1].fields[2]]
-      dom_type    = [string(t.args[2].args[1])]
-      codom_type  = [string(t.args[3].args[1])]
-      if isa(dom_type[1],DataType)
-        dom_type[1] = TypeToSql[dom_type[1]]
+      dom_type    = t.args[2].args[1]
+      codom_type  = t.args[3].args[1]
+      if isa(dom_type,DataType)
+        dom_type = TypeToSql[dom_type]
+      else
+        dom_type = string(dom_type[1])
       end
-      if isa(codom_type[1],DataType)
-        codom_type[1] = TypeToSql[codom_type[1]]
+      if isa(codom_type,DataType)
+        codom_type = TypeToSql[codom_type]
+      else
+        codom_type = string(codom_type[1])
       end
-      Query(Types(dom_type), Types(codom_type),
+      Query(type_to_field[dom_type], type_to_field[codom_type],
             dom_name, codom_name,
             "Select * from $(t.args[1].name)", "DEFINED")
     end

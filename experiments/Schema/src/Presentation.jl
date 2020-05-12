@@ -23,7 +23,7 @@ sql(s::Schema) = begin
         end
         # construct a composite type
         f = (i,x) -> "$i $(TypeToSql[x])"
-         components = t.args[1][2]
+        components = t.args[1][2]
         fields = (f(k,components[k]) for k in keys(components)) |> x->join(x, ", ")
         "CREATE TYPE $(t.args[1][1]) as ($(fields));"
     end
