@@ -39,7 +39,7 @@ module QueryLib
 
       # Iterate the digit until the value is unique
       while cur_val in a_n
-        if occursin("_", cur_val)
+        if occursin(r"_\d*$", cur_val)
           cur_val = replace(cur_val, r"_\d*$" => (c) -> "_"*string(parse(Int, c[2:end])+1))
         else
           cur_val = cur_val*"_0"

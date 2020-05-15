@@ -1,5 +1,5 @@
 module Interface
-  export init_tables, prepare, execute, Connection  
+  export init_tables, prepare, execute, Connection, format_form 
 
   using Catlab
   using Schema.Presentation, Schema.QueryLib
@@ -58,6 +58,23 @@ module Interface
 
   function execute(st::Statement, input::AbstractArray)::DataFrame
     DataFrame(LibPQ.execute(st, input))
+  end
+
+  function to_diagram(formula)
+    temp_form = deepcopy(formula)
+    format_form(temp_form)
+  end
+
+  function format_form!(formula)
+    if typeof(formula).parameters[1] == :generator
+      if hasproperty(formula.args[1], :name)
+        formula.args[1] = formula.args[1].name
+      end
+    else
+      for val in formula.args
+        format_form(val)
+      end
+    end
   end
 
 end
