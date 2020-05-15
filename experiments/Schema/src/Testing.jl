@@ -1,15 +1,15 @@
 # here is an example
-using Catlab, Catlab.Doctrines, Catlab.Present 
+using Catlab, Catlab.Doctrines, Catlab.Present
 using Schema.QueryLib, Schema.Presentation
 using Schema.Interface
 import Schema.Presentation: Schema, sql
 
 # Define the Types
-Name = Ob(FreeAbBiRelMeetJoin, (:full_name, (first=String, last=String)))
-Person = Ob(FreeAbBiRelMeetJoin, (:person, (id=Int,)))
-X = Ob(FreeAbBiRelMeetJoin, Int)
-F = Ob(FreeAbBiRelMeetJoin, Float64)
-ID = Ob(FreeAbBiRelMeetJoin, (:ID, (id=Int,)))
+Name = Ob(FreeBicategoryRelations, (:full_name, (first=String, last=String)))
+Person = Ob(FreeBicategoryRelations, (:person, (id=Int,)))
+X = Ob(FreeBicategoryRelations, Int)
+F = Ob(FreeBicategoryRelations, Float64)
+ID = Ob(FreeBicategoryRelations, (:ID, (id=Int,)))
 
 # Define the relationships
 name = Hom((name=:names, fields=("person", "full_name")), Person, Name)
@@ -55,14 +55,19 @@ println("INSERT INTO salary    VALUES (ROW(4), 90000);")
 
 # Generate and display a query to get (names, salaries)
 println("Copy the following to generate run the query:")
-formula = meet(emply⋅dagger(emply), custo⋅dagger(custo))⋅emply
-query(f) = make_query(schema, f).query
+
+#Salary and manager's name for each person
+formula = dagger(name)⋅mcopy(Person)⋅(salry⊗(manag⋅name))⋅σ(F,Name)
+
+# Employees who have the same salary and manager
+#formula = dagger(name)⋅mcopy(Person)⋅((salry⋅dagger(salry))⊗(manag⋅dagger(manag)))⋅mmerge(Person)⋅name
+query(f) = to_sql(make_query(schema, f))
 
 println(query(formula))
 
-conn = Connection("dbname=e3isd")
-statement = prepare(conn, schema, formula)
-println(execute(conn, schema, formula))
-println(execute(statement, ["ROW(1)"]))
+#conn = Connection("dbname=e3isd")
+#statement = prepare(conn, schema, formula)
+#println(execute(conn, schema, formula))
+#println(execute(statement, ["ROW(1)"]))
 # get the salary of a person's manager
 # query(manag⋅salry) == "select (manager.id, salary.salary) from manager join salary on manager.manager == salary.id"

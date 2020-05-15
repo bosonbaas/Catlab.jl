@@ -1,9 +1,9 @@
 module QueryLib
 
-  export Types, Query, make_query, FreeAbBiRelMeetJoin,
+  export Types, Query, make_query,
     Ob, Hom, dom, codom, compose, ⋅, ∘, id, otimes, ⊗, munit, braid, σ,
     dagger, dunit, dcounit, mcopy, Δ, delete, ◊, mmerge, ∇, create, □,
-    meet, top#, plus, zero, coplus, cozero,  join, bottom
+    meet, top, to_sql#, plus, zero, coplus, cozero,  join, bottom
 
   using Catlab, Catlab.Doctrines, Catlab.Present
   import Catlab.Doctrines:
@@ -22,156 +22,246 @@ module QueryLib
   struct Query
     dom::Types
     codom::Types
-    dom_names::Array{String,1}
-    codom_names::Array{String,1}
-    query::String
-    type::String
+    dom_names::Array{Int,1}
+    codom_names::Array{Int,1}
+    tables::Array{String,1}
+    fields::Array{Tuple{Int,String},1}
+    connections::Array{Tuple{Int,Int},1}
   end
 
-  # Make every element of the array unique by appending ":X" with X as some digit
-  # This is necessary to prevent namespace collisions between columns
-  uniquify(a::Array{String,1}) = begin
+  function to_sql(q::Query)::String
+    # Convert index to table alias
+    ind_to_tab(i) = "t$i"
 
-    a_n = Array{String,1}()
-    # Fill a_n with unique values
-    for i in 1:length(a)
-      cur_val = a[i]
+    # Index to table name + alias
+    ind_to_alias(i) = "$(q.tables[i]) AS $(ind_to_tab(i))"
 
-      # Iterate the digit until the value is unique
-      while cur_val in a_n
-        if occursin(r"_\d*$", cur_val)
-          cur_val = replace(cur_val, r"_\d*$" => (c) -> "_"*string(parse(Int, c[2:end])+1))
-        else
-          cur_val = cur_val*"_0"
+    # Get field name from field index
+    field_to_s(i) = ind_to_tab(q.fields[i][1])*".$(q.fields[i][2])"
+
+    # Select statement
+    select = "SELECT "*join(field_to_s.(vcat(q.dom_names, q.codom_names)),", ")*"\n"
+
+    # From statement
+    from = "FROM "*join(ind_to_alias.(collect(1:length(q.tables))), ", ")*"\n"
+
+    # Conditions
+    s_conn = Array{String,1}()
+
+    for conn in q.connections
+      # Don't include a value if it's just a variable (shows a variable loop)
+      if q.fields[conn[1]][2] == "*"
+        continue
+      end
+
+      append!(s_conn,[field_to_s(conn[1])*"="*field_to_s(conn[2])])
+    end
+    condition = "WHERE "*join(s_conn, " AND ")*";"
+    return select*from*condition
+  end
+
+  function eval_variables!(q::Query)
+    changes = 1
+    while changes > 0
+      changes = 0
+      for conn in q.connections
+        src = conn[1]
+        dst = conn[2]
+
+        # Set variables to fields they are equal to
+        if q.fields[src][2] == "*"
+          if q.fields[dst][2] != "*"
+            q.fields[src] = q.fields[dst]
+            changes += 1
+          end
+        elseif q.fields[dst][2] == "*"
+          if q.fields[src][2] != "*"
+            q.fields[dst] = q.fields[src]
+            changes += 1
+          end
         end
       end
-      append!(a_n, [cur_val])
     end
-    return a_n
+
+    # Remove self-connections
+    is_self(x) = !(q.fields[x[1]] == q.fields[x[2]]) || q.fields[x[1]][2] == "*"
+    filter!(is_self, q.connections)
+    return q
   end
 
-  @syntax FreeAbBiRelMeetJoin(ObExpr,HomExpr) AbelianBicategoryRelations begin
-    otimes(A::Ob, B::Ob) = associate_unit(new(A,B), munit)
-    otimes(f::Hom, g::Hom) = associate(new(f,g))
-    compose(f::Hom, g::Hom) = associate(new(f,g; strict=true))
-    dagger(f::Hom) = distribute_unary(distribute_dagger(involute(new(f))),
-                                      dagger, otimes)
-  end
-
-  @instance AbelianBicategoryRelations(Types, Query) begin
+  @instance BicategoryRelations(Types, Query) begin
 
     dom(f::Query)   = f.dom
     codom(f::Query) = f.codom
     munit(::Type{Types}) = Types(Array{String, 1}(), Array{Array{String, 1},1}())
 
     compose(f::Query, g::Query) = begin
+      # Set domain and codomain types and names
+      n_dom = dom(f)
+      n_cod = codom(g)
+      n_dom_names = copy(f.dom_names)
+      n_cod_names = copy(g.codom_names)
+      n_tables = vcat(f.tables, g.tables)
+      n_fields = vcat(f.fields, g.fields)
+      n_conn = vcat(f.connections, g.connections)
 
-			prepend(x) = (w) -> x*w # This is necessary for adding query aliasses to
-                              # column names
+      # Increment all table references in g's fields
+      inc = length(f.tables)
+      for i in (1+length(f.fields)):length(n_fields)
+        n_fields[i] = (n_fields[i][1]+inc, n_fields[i][2])
+      end
 
-      # Generate unique domain and codomain names
-      unique_names = uniquify(vcat(f.dom_names, g.codom_names))
-      dom_names = unique_names[1:length(f.dom_names)]
-      codom_names = unique_names[(length(f.dom_names)+1):end]
+      # Increment all table references in g's fields
+      inc = length(f.fields)
+      for i in (1+length(f.connections)):length(n_conn)
+        n_conn[i] = (n_conn[i][1]+inc, n_conn[i][2]+inc)
+      end
 
-      # Generate select statements, aliasing to the new unique names
-      select_dom = prepend("A.").(f.dom_names.*" AS ".*dom_names)
-      select_codom = prepend("B.").(g.codom_names.*" AS ".*codom_names)
+      # Increment all table references in g's dom
+      inc = length(f.fields)
+      for i in 1:length(n_cod_names)
+        n_cod_names[i] += inc
+      end
 
-      # Combine the query
-      new_query = "SELECT DISTINCT $(join(vcat(select_dom, select_codom),",\n"))\n"*
-                  "FROM ($(f.query)) AS A\n INNER JOIN ($(g.query)) AS B ON\n"
+      # Add connections between f.cdom and g.dom
+      inc = length(f.fields)
+      for i in 1:length(f.codom_names)
+        src = f.codom_names[i]
+        dst = g.dom_names[i] + inc
+        append!(n_conn,[(src, dst)])
+      end
 
-      # Define the joining conditions
-      conditions =  join(map(1:length(f.codom.types)) do i
-                      "A.$(f.codom_names[i])=B.$(g.dom_names[i])"
-                    end,
-                    " AND\n")
-
-      Query(f.dom, g.codom, dom_names, codom_names, new_query*conditions, "DEFINED")
+      # Make new query
+      n_query = Query(n_dom, n_cod, n_dom_names, n_cod_names, n_tables, n_fields, n_conn)
+      eval_variables!(n_query)
+      return n_query
     end
 
     otimes(A::Types, B::Types) = Types(vcat(A.types,B.types), vcat(A.sub_fields,B.sub_fields))
     otimes(f::Query, g::Query) = begin
-      prepend(x)  = (w) -> x*w
-      append(x)   = (w) -> w*x
-      alias(e)    = (w) -> w*" AS "*w*e
-      Query(otimes(f.dom, g.dom), otimes(f.codom,g.codom),
-            vcat(append("_top").(f.dom_names), append("_bot").(g.dom_names)),
-            vcat(append("_top").(f.codom_names), append("_bot").(g.codom_names)),
-            "SELECT DISTINCT $(join(prepend("A.").(alias("_top").(vcat(f.dom_names,f.codom_names))),",")),
-                    $(join(prepend("B.").(alias("_bot").(vcat(g.dom_names,g.codom_names))),","))\n
-                    FROM ($(f.query)) AS A,($(g.query)) AS B", "DEFINED")
+      # Set domain and codomain types and names
+      n_dom = otimes(dom(f), dom(g))
+      n_cod = otimes(codom(f),codom(g))
+      n_dom_names = vcat(f.dom_names,g.dom_names)
+      n_cod_names = vcat(f.codom_names,g.codom_names)
+      n_tables = vcat(f.tables, g.tables)
+      n_fields = vcat(f.fields, g.fields)
+      n_conn = vcat(f.connections, g.connections)
+
+      # Increment g's table references in dom
+      inc = length(f.fields)
+      for i in (length(f.dom_names)+1):length(n_dom_names)
+        n_dom_names[i] += inc
+      end
+
+      # Increment g's table references in codom
+      inc = length(f.fields)
+      for i in (length(f.codom_names)+1):length(n_cod_names)
+        n_cod_names[i] += inc
+      end
+
+      # Increment all table references in g's fields
+      inc = length(f.tables)
+      for i in (1+length(f.fields)):length(n_fields)
+        n_fields[i] = (n_fields[i][1]+inc, n_fields[i][2])
+      end
+
+      # Increment all table references in g's connections
+      inc = length(f.fields)
+      for i in (1+length(f.connections)):length(n_conn)
+        n_conn[i] = (n_conn[i][1]+inc, n_conn[i][2]+inc)
+      end
+
+      # Make new query
+      n_query = Query(n_dom, n_cod, n_dom_names, n_cod_names, n_tables, n_fields, n_conn)
+      eval_variables!(n_query)
+      return n_query
+
     end
 
     meet(f::Query, g::Query) = begin
-      Query(f.dom, f.codom, f.dom_names, f.codom_names, f.query*"\nINTERSECT\n"*g.query, "DEFINED")
+      mcopy(dom(A))⋅(f⊗g)⋅mmerge(codom(f))
     end
 
-    join(f::Query, g::Query) = begin
-      Query(f.dom, f.codom, f.dom_names, f.codom_names, f.query*"\nUNION\n"*g.query, "DEFINED")
-    end
-
-    dagger(f::Query) = Query(f.codom, f.dom, f.codom_names, f.dom_names, f.query, f.type)
+    dagger(f::Query) = Query(f.codom, f.dom, f.codom_names, f.dom_names,
+                             f.tables, f.fields, f.connections)
 
     dunit(A::Types) = begin
-      throw(MethodError(dunit, A))
+      create(A)⋅mcopy(A)
     end
 
     top(A::Types, B::Types) = begin
-      throw(MethodError(top, [A,B]))
+      delete(A)⋅create(B)
     end
 
     dcounit(A::Types) = begin
-      throw(MethodError(dcounit, A))
+      dagger(dunit(A))
     end
 
     id(A::Types) = begin
-      throw(MethodError(id, A))
+      Query(A, A, [1], [2], [],
+            [(0,"*"),(0,"*")],
+            [(1,2)])
     end
 
     braid(A::Types, B::Types) = begin
-      throw(MethodError(braid, [A,B]))
+      A_len = length(A.types)
+      B_len = length(B.types)
+      tot_len = A_len + B_len
+
+      domain   = collect(1:(tot_len))
+      codomain = collect((tot_len+1):((tot_len)*2))
+
+      fields = fill((0,"*"),(tot_len)*2)
+
+      connections = Array{Tuple{Int,Int},1}()
+      for i in 1:length(domain)
+        if i > A_len
+          append!(connections, [(i,i-A_len + tot_len)])
+        else
+          append!(connections, [(i,i+B_len + tot_len)])
+        end
+      end
+
+      Query(otimes(A,B), otimes(B,A), domain, codomain, [],
+            fields, connections)
     end
 
     mcopy(A::Types) = begin
-      throw(MethodError(mcopy),A)
+      A_len = length(A.types)
+      domain   = collect(1:A_len)
+      codomain = collect((A_len+1):(A_len*3))
+
+      connections = Array{Tuple{Int,Int},1}()
+      for i in 1:length(domain)
+        append!(connections, [(i,i+A_len),(i,i+A_len*2)])
+      end
+
+      fields = fill((0,"*"),A_len*3)
+
+      Query(A, otimes(A,A), domain, codomain, [],
+            fields, connections)
     end
 
     mmerge(A::Types) = begin
-      throw(MethodError(mmerge,A))
+      dagger(mcopy(A))
     end
 
     delete(A::Types) = begin
-      throw(MethodError(delete,A))
+      A_len = length(A.types)
+      domain   = collect(1:A_len)
+      codomain = Array{Int,1}()
+
+      fields = fill((0,"*"),A_len)
+      connections = Array{Tuple{Int,Int},1}()
+
+      Query(A, munit(Types), domain, codomain, [],
+            fields, connections)
     end
 
     create(A::Types) = begin
-      throw(MethodError(create,A))
+      dagger(delete(A))
     end
-
-    plus(A::Types) = begin
-      throw(MethodError(plus,A))
-    end
-
-    zero(A::Types) = begin
-      throw(MethodError(zero,A))
-    end
-
-    coplus(A::Types) = begin
-      throw(MethodError(coplus,A))
-    end
-
-    cozero(A::Types) = begin
-      throw(MethodError(cozero,A))
-    end
-
-    bottom(A::Types,B::Types) = begin
-      throw(MethodError(bottom,[A,B]))
-    end
-
-
-
   end
 
   make_query(s::Schema, q::GATExpr)::Query = begin
@@ -197,16 +287,17 @@ module QueryLib
       if isa(dom_type,DataType)
         dom_type = TypeToSql[dom_type]
       else
-        dom_type = string(dom_type[1])
+        dom_type = String(dom_type[1])
       end
       if isa(codom_type,DataType)
         codom_type = TypeToSql[codom_type]
       else
-        codom_type = string(codom_type[1])
+        codom_type = String(codom_type[1])
       end
+      tables = [String(t.args[1].name)]
+      fields = [(1,dom_name[1]),(1,codom_name[1])]
       Query(type_to_field[dom_type], type_to_field[codom_type],
-            dom_name, codom_name,
-            "Select * from $(t.args[1].name)", "DEFINED")
+            [1], [2], tables, fields,[])
     end
     d = Dict()
     for i in 1:length(q_types)
@@ -217,6 +308,4 @@ module QueryLib
     end
     functor((Types, Query), q, generators=d)
   end
-
-
 end
