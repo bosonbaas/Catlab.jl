@@ -28,11 +28,11 @@ This structure holds the relationship graph between fields in a query
 - `codom::Types`: the types of the columns in the codomain
 - `dom_names::Array{Int,1}`: index of the domain fields
 - `codom_names::Array{Int,1}`: index of the codomain fields
-- `tables::Array{String,1}`: Names of the tables included in the relationship 
+- `tables::Array{String,1}`: Names of the tables included in the relationship
                              graph
-- `fields::Array{Tuple{Int,String},1}`: Connection between a table and its 
+- `fields::Array{Tuple{Int,String},1}`: Connection between a table and its
                                         fields
-- `edges::Array{Tuple{Int,Int},1}`: Equality relationship between fields of 
+- `edges::Array{Tuple{Int,Int},1}`: Equality relationship between fields of
                                     tables
 """
 struct Query
@@ -82,9 +82,9 @@ end
 
 Evaluate any "*" nodes in the relational graph.
 
-This algorithm steps through every edge and acts on an edge if it is between a 
-"*" node and an actual node. This exits early if there are no more 
-modifications to make, but otherwise will execute no more times than there are 
+This algorithm steps through every edge and acts on an edge if it is between a
+"*" node and an actual node. This exits early if there are no more
+modifications to make, but otherwise will execute no more times than there are
 nodes in the network.
 """
 function eval_variables!(q::Query)
@@ -92,7 +92,7 @@ function eval_variables!(q::Query)
   # There will be at least one update per iteration, so it won't go past the
   # number of fields
   for ind in 1:length(q.fields)
-    
+
     # Keep track of the number of changes made (to see if we're done)
     changes = 0
     for e in q.edges
@@ -310,40 +310,95 @@ end
 end
 
 make_query(s::Schema, q::GATExpr)::Query = begin
+
+  # Keep the type names associated to consistent Types objects
   type_to_field = Dict{String,Types}()
+
+  # Generate Types objects from object description
   q_types = map(s.types) do t
+
+    # If our type is primitive, just use the SQL type
     if typeof(t.args[1]) <: DataType
-      type = TypeToSql[t.args[1]]
-      type_to_field[type] = Types([type], [Array{String,1}()])
-      return type_to_field[type]
+      type_name    = TypeToSql[t.args[1]]
+      fields  = [Array{String,1}()]
+      type_to_field[type_name] = Types([type_name], fields)
+      return type_to_field[type_name]
     end
+
+    # Otherwise, we use the symbol name and keep track of fields
     components = t.args[1][2]
-    type = string(t.args[1][1])
+    type_name = string(t.args[1][1])
     fields = [TypeToSql[components[k]] for k in keys(components)]
-    type_to_field[type] = Types([type], [fields])
-    return type_to_field[type]
+    type_to_field[type_name] = Types([type_name], [fields])
+    return type_to_field[type_name]
   end
+
+  # Generate the Query objects from hom descriptions
   q_homs = map(s.relations) do t
-    # Get the dom type and name
-    dom_name    = [t.args[1].fields[1]]
-    codom_name  = [t.args[1].fields[2]]
-    dom_type    = t.args[2].args[1]
-    codom_type  = t.args[3].args[1]
-    if isa(dom_type,DataType)
-      dom_type = TypeToSql[dom_type]
+
+    dom_type    = Array{Types, 1}()
+    codom_type  = Array{Types, 1}()
+    dom_name    = Array{String,1}()
+    codom_name  = Array{String,1}()
+
+    # First do domain, then codomain
+    names = t.args[1].fields[1]
+    types = t.args[2]
+
+    # Check if domain is composition
+    if typeof(types) <: Catlab.Doctrines.FreeBicategoryRelations.Ob{:otimes}
+      dom_name = names
+      dom_type = map(types.args) do cur_t
+        if isa(cur_t.args[1], DataType)
+          return type_to_field[TypeToSql[cur_t.args[1]]]
+        else
+          return type_to_field[string(cur_t.args[1][1])]
+        end
+      end
     else
-      dom_type = String(dom_type[1])
+      dom_name = [names]
+      if typeof(types.args[1]) <: DataType
+        dom_type = [type_to_field[TypeToSql[types.args[1]]]]
+      else
+        dom_type = [type_to_field[string(types.args[1][1])]]
+      end
     end
-    if isa(codom_type,DataType)
-      codom_type = TypeToSql[codom_type]
+
+    # Check if codomain is composition
+    if typeof(types) <: Catlab.Doctrines.FreeBicategoryRelations.Ob{:otimes}
+      codom_name = names
+      codom_type = map(types.args) do cur_t
+        if isa(cur_t.args[1], DataType)
+          return type_to_field[TypeToSql[cur_t.args[1]]]
+        else
+          return type_to_field[string(cur_t.args[1][1])]
+        end
+      end
     else
-      codom_type = String(codom_type[1])
+      codom_name = [names]
+      if typeof(types.args[1]) <: DataType
+        codom_type = [type_to_field[TypeToSql[types.args[1]]]]
+      else
+        codom_type = [type_to_field[string(types.args[1][1])]]
+      end
     end
+
     tables = [String(t.args[1].name)]
-    fields = [(1,dom_name[1]),(1,codom_name[1])]
-    Query(type_to_field[dom_type], type_to_field[codom_type],
-          [1], [2], tables, fields,[])
+    join_names = vcat(dom_name, codom_name)
+
+    # Generate the fields array
+    fields = Array{Tuple{Int,String},1}()
+    for i in 1:length(join_names)
+      append!(fields,[(1,join_names[i])])
+    end
+
+    dom_names   = collect(1:length(dom_name))
+    codom_names = collect((1+length(dom_name)):length(join_names))
+
+    Query(otimes(dom_type), otimes(codom_type),
+          dom_names, codom_names, tables, fields,[])
   end
+
   d = Dict()
   for i in 1:length(q_types)
     d[s.types[i]] = q_types[i]

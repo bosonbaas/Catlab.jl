@@ -17,7 +17,7 @@ emply = Hom((name=:employees, fields=("person", "ID")), Person, ID)
 custo = Hom((name=:customers, fields=("person", "ID")), Person, ID)
 manag = Hom((name=:manager, fields=("person", "manager")), Person, Person)
 salry = Hom((name=:salary, fields=("person", "salary")), Person, F)
-e_cust_conn = Hom((name=:interactions, fields=(["employee", "customer"], "interaction"), Person⊗Person, X)
+e_cust_conn = Hom((name=:interactions, fields=(["employee", "customer"], "interaction")), Person⊗Person, X)
 
 # Set up arrays of types and relationships for Schema
 types = [Name, Person, X,F,ID]
@@ -58,10 +58,12 @@ println("INSERT INTO salary    VALUES (ROW(4), 90000);")
 println("Copy the following to generate run the query:")
 
 #Salary and manager's name for each person
-formula = dagger(name)⋅mcopy(Person)⋅(salry⊗(manag⋅name))⋅σ(F,Name)
+#formula = dagger(name)⋅mcopy(Person)⋅(salry⊗(manag⋅name))⋅σ(F,Name)
 
 # Employees who have the same salary and manager
 #formula = dagger(name)⋅mcopy(Person)⋅((salry⋅dagger(salry))⊗(manag⋅dagger(manag)))⋅mmerge(Person)⋅name
+
+# Customer/employee relationship between employee and their manager
 query(f) = to_sql(make_query(schema, f))
 
 println(query(formula))
