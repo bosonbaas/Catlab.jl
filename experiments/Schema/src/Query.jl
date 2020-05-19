@@ -364,6 +364,8 @@ make_query(s::Schema, q::GATExpr)::Query = begin
       end
     end
 
+    names = t.args[1].fields[2]
+    types = t.args[3]
     # Check if codomain is composition
     if typeof(types) <: Catlab.Doctrines.FreeBicategoryRelations.Ob{:otimes}
       codom_name = names

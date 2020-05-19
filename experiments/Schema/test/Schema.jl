@@ -64,6 +64,7 @@ println("Copy the following to generate run the query:")
 #formula = dagger(name)⋅mcopy(Person)⋅((salry⋅dagger(salry))⊗(manag⋅dagger(manag)))⋅mmerge(Person)⋅name
 
 # Customer/employee relationship between employee and their manager
+formula = dagger(name)⋅mcopy(Person)⋅(id(Person)⊗manag)⋅e_cust_conn
 query(f) = to_sql(make_query(schema, f))
 
 println(query(formula))
