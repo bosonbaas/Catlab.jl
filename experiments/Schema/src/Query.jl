@@ -1,22 +1,22 @@
 module QueryLib
 
-export Types, Query, make_query,
+export Ports, Query, make_query,
   Ob, Hom, dom, codom, compose, ⋅, ∘, id, otimes, ⊗, munit, braid, σ,
   dagger, dunit, dcounit, mcopy, Δ, delete, ◊, mmerge, ∇, create, □,
   meet, top, to_sql#, plus, zero, coplus, cozero,  join, bottom
 
-using Catlab, Catlab.Doctrines, Catlab.Present
+using Catlab, Catlab.Doctrines, Catlab.Present, Catlab.WiringDiagrams
 import Catlab.Doctrines:
   Ob, Hom, dom, codom, compose, ⋅, ∘, id, otimes, ⊗, munit, braid, σ,
   dagger, dunit, dcounit, mcopy, Δ, delete, ◊, mmerge, ∇, create, □,
   plus, zero, coplus, cozero, meet, top, join, bottom, distribute_dagger
 
 using AutoHashEquals
+using LightGraphs, MetaGraphs
 import Schema.Presentation: Schema, TypeToSql
 
 @auto_hash_equals struct Types
-  types::Array{String,1}
-  sub_fields::Array{Array{String,1},1}
+  types::Array{Symbol,1}
 end
 
 """ Query
@@ -36,276 +36,162 @@ This structure holds the relationship graph between fields in a query
                                     tables
 """
 struct Query
-  dom::Types
-  codom::Types
-  dom_names::Array{Int,1}
-  codom_names::Array{Int,1}
-  tables::Array{String,1}
-  fields::Array{Tuple{Int,String},1}
-  edges::Array{Tuple{Int,Int},1}
+  tables::Dict{Symbol, Tuple(Array{String,1}, Array{String,1})}
+  wd::WiringDiagram
+end
+
+Query(wd::WiringDiagram)::Query = begin
+  n_table = Dict{Symbol, Tuple(Array{String,1}, Array{String,1})}()
+  Query(n_table, wd)
 end
 
 function to_sql(q::Query)::String
-  # Convert index to table alias
-  ind_to_tab(i) = "t$i"
 
-  # Index to table name + alias
-  ind_to_alias(i) = "$(q.tables[i]) AS $(ind_to_tab(i))"
+  ind_to_alias(i) = "t$i"
+  wd = q.wd
 
-  # Get field name from field index
-  field_to_s(i) = ind_to_tab(q.fields[i][1])*".$(q.fields[i][2])"
+  # Get the vertices as (name, is_dagger, is_junc)
+  struct Vertex
+    name::Symbol
+    is_dagger::Bool
+    is_junc::Bool
+  end
 
-  # Select statement
-  select = "SELECT "*join(field_to_s.(vcat(q.dom_names, q.codom_names)),", ")*"\n"
+  verts = fill(Vertex(:*,false,false),nv(wd.graph))
+  verts[1] = Vertex(:input,false,false)
+  verts[2] = Vertex(:output,false,false)
 
-  # From statement
-  from = "FROM "*join(ind_to_alias.(collect(1:length(q.tables))), ", ")*"\n"
+  for (k,v) in boxes(wd)
+    is_junc   = false
+    is_dagger = false
+    name      = :*
+    if typeof(v) <: Junction
+      vert.is_junc = true
+    elseif typeof(v) <: BoxOp{:dagger}
+      vert.is_dagger = true
+      vert.name = v.box.value
+    else
+      vert.name = v.value
+    end
+    verts[k] = Vertex(name, is_dagger, is_junc)
+  end
 
-  # Conditions
-  s_edges = Array{String,1}()
+  # Make the join statement
+  alias_array = Array{String,1}
+  for v in box_ids(wd)
+    cur_b = vert[v]
+    name = string(cur_b.name)
+    if !cur_b.is_junc
+      append!(alias_array, ["$name AS $(ind_to_alias(v))"])
+  end
 
-  for e in q.edges
-    # Don't include a value if it's just a variable (shows a variable loop)
-    if q.fields[e[1]][2] == "*"
-      continue
+  # Make the relation statement
+  relation_array = Array{String,1}
+  dom_array   = fill("", length(wd.input_ports))
+  codom_array = fill("", length(wd.output_ports))
+  for e in wires(wd)
+    if e.source.box == 1
+      db = e.target.box
+      dp = e.target.port
+      df = tables[verts[db].name][dp]
+      dom_array[e.source.port] = "$(ind_to_alias(db)).$df"
+    end
+    if e.target.box == 2
+      sb = e.source.box
+      sp = e.source.port
+      sf = tables[verts[sb].name][sp]
+      codom_array[e.target.port] = "$(ind_to_alias(sb)).$sf"
     end
 
-    append!(s_edges,[field_to_s(e[1])*"="*field_to_s(e[2])])
+    sb = e.source.box
+    sp = e.source.port
+    sf = tables[verts[sb].name][1][sp]
+    if verts[sb].is_dagger
+      sf = tables[verts[sb].name][2][sp]
+    end
+    src = "$(ind_to_alias(sb)).$sf"
+
+    db = e.target.box
+    dp = e.target.port
+    df = tables[verts[db].name][2][dp]
+    if verts[db].is_dagger
+      df = tables[verts[db].name][1][dp]
+    end
+    dst = "$(ind_to_alias(db)).$df"
+
+    if dst*"="*src in relation_array or src*"="*dst in relation_array
+      continue
+    append!(relation_array, [src*"="*dst])
   end
-  condition = "WHERE "*join(s_edges, " AND ")*";"
+
+  select = "SELECT "*join(vcat(dom_array, codom_array), ", ")*"\n"
+  from = "FROM "*join(alias_array, ", ")*"\n"
+  condition = "WHERE "*join(relation_array, " AND ")*";"
+
   return select*from*condition
 end
 
+@instance BicategoryRelations(Ports{BicategoryRelations.Hom, Symbol}, Query) begin
 
-"""
-    eval_variables!(q::Query)
-
-Evaluate any "*" nodes in the relational graph.
-
-This algorithm steps through every edge and acts on an edge if it is between a
-"*" node and an actual node. This exits early if there are no more
-modifications to make, but otherwise will execute no more times than there are
-nodes in the network.
-"""
-function eval_variables!(q::Query)
-
-  # There will be at least one update per iteration, so it won't go past the
-  # number of fields
-  for ind in 1:length(q.fields)
-
-    # Keep track of the number of changes made (to see if we're done)
-    changes = 0
-    for e in q.edges
-      src = e[1]
-      dst = e[2]
-
-      # Remove any "*" nodes using equality relationships they have to non-"*"
-      # nodes
-      if q.fields[src][2] == "*" && q.fields[dst][2] != "*"
-        q.fields[src] = q.fields[dst]
-        changes += 1
-      elseif q.fields[src][2] != "*" && q.fields[dst][2] == "*"
-        q.fields[dst] = q.fields[src]
-        changes += 1
-      end
-    end
-
-    # We're done if there are no more changes to make
-    if changes == 0
-      break
-    end
-  end
-
-  # Remove self-connections
-  is_self(x) = !(q.fields[x[1]] == q.fields[x[2]]) || q.fields[x[1]][2] == "*"
-  filter!(is_self, q.edges)
-  return q
-end
-
-@instance BicategoryRelations(Types, Query) begin
-
-  dom(f::Query)   = f.dom
-  codom(f::Query) = f.codom
-  munit(::Type{Types}) = Types(Array{String, 1}(), Array{Array{String, 1},1}())
+  dom(f::Query)   = input_ports(Ports, f.wd)
+  codom(f::Query) = output_ports(Ports, f.wd)
+  munit(::Type{Ports}) = Ports{BicategoryRelations.Hom, Symbol}([])
 
   compose(f::Query, g::Query) = begin
-    # Set domain and codomain types and names
-    n_dom = dom(f)
-    n_cod = codom(g)
-    n_dom_names = copy(f.dom_names)
-    n_cod_names = copy(g.codom_names)
-    n_tables = vcat(f.tables, g.tables)
-    n_fields = vcat(f.fields, g.fields)
-    n_edges = vcat(f.edges, g.edges)
-
-    # Increment all table references in g's fields
-    inc = length(f.tables)
-    for i in (1+length(f.fields)):length(n_fields)
-      n_fields[i] = (n_fields[i][1]+inc, n_fields[i][2])
-    end
-
-    # Increment all table references in g's fields
-    inc = length(f.fields)
-    for i in (1+length(f.edges)):length(n_edges)
-      n_edges[i] = (n_edges[i][1]+inc, n_edges[i][2]+inc)
-    end
-
-    # Increment all table references in g's dom
-    inc = length(f.fields)
-    for i in 1:length(n_cod_names)
-      n_cod_names[i] += inc
-    end
-
-    # Add connections between f.cdom and g.dom
-    inc = length(f.fields)
-    for i in 1:length(f.codom_names)
-      src = f.codom_names[i]
-      dst = g.dom_names[i] + inc
-      append!(n_edges,[(src, dst)])
-    end
-
-    # Make new query
-    n_query = Query(n_dom, n_cod, n_dom_names, n_cod_names, n_tables, n_fields, n_edges)
-    eval_variables!(n_query)
-    return n_query
+    n_tables = merge(f.tables, g.tables)
+    n_wd = compose(f.wd, g.wd)
+    return Query(n_tables, n_wd)
   end
 
-  otimes(A::Types, B::Types) = Types(vcat(A.types,B.types), vcat(A.sub_fields,B.sub_fields))
+  otimes(A::Ports, B::Ports) = otimes(A,B)
   otimes(f::Query, g::Query) = begin
-    # Set domain and codomain types and names
-    n_dom = otimes(dom(f), dom(g))
-    n_cod = otimes(codom(f),codom(g))
-    n_dom_names = vcat(f.dom_names,g.dom_names)
-    n_cod_names = vcat(f.codom_names,g.codom_names)
-    n_tables = vcat(f.tables, g.tables)
-    n_fields = vcat(f.fields, g.fields)
-    n_edges = vcat(f.edges, g.edges)
-
-    # Increment g's table references in dom
-    inc = length(f.fields)
-    for i in (length(f.dom_names)+1):length(n_dom_names)
-      n_dom_names[i] += inc
-    end
-
-    # Increment g's table references in codom
-    inc = length(f.fields)
-    for i in (length(f.codom_names)+1):length(n_cod_names)
-      n_cod_names[i] += inc
-    end
-
-    # Increment all table references in g's fields
-    inc = length(f.tables)
-    for i in (1+length(f.fields)):length(n_fields)
-      n_fields[i] = (n_fields[i][1]+inc, n_fields[i][2])
-    end
-
-    # Increment all table references in g's connections
-    inc = length(f.fields)
-    for i in (1+length(f.edges)):length(n_edges)
-      n_edges[i] = (n_edges[i][1]+inc, n_edges[i][2]+inc)
-    end
-
-    # Make new query
-    n_query = Query(n_dom, n_cod, n_dom_names, n_cod_names, n_tables, n_fields, n_edges)
-    eval_variables!(n_query)
-    return n_query
-
+    n_tables = merge(f.tables, g.tables)
+    n_wd = otimes(f.wd, g.wd)
+    return Query(n_tables, n_wd)
   end
 
   meet(f::Query, g::Query) = begin
-    mcopy(dom(A))⋅(f⊗g)⋅mmerge(codom(f))
+    n_tables = merge(f.tables, g.tables)
+    n_wd = meet(f.wd, g.wd)
+    return Query(n_tables, n_wd)
   end
 
-  dagger(f::Query) = Query(f.codom, f.dom, f.codom_names, f.dom_names,
-                           f.tables, f.fields, f.edges)
+  dagger(f::Query) = Query(f.tables, dagger(f.wd))
 
-  dunit(A::Types) = begin
-    create(A)⋅mcopy(A)
+  dunit(A::Ports) = begin
+    Query(dunit(A))
   end
 
-  top(A::Types, B::Types) = begin
-    delete(A)⋅create(B)
+  top(A::Ports, B::Ports) = begin
+    Query(top(A,B))
   end
 
-  dcounit(A::Types) = begin
-    dagger(dunit(A))
+  dcounit(A::Ports) = begin
+    Query(dcounit(A))
   end
 
-  id(A::Types) = begin
-    A_len = length(A.types)
-
-    domain   = collect(1:A_len)
-    codomain = collect((A_len+1):(2*A_len))
-
-    fields = fill((0,"*"),2*A_len)
-
-    edges = Array{Tuple{Int,Int},1}()
-    for i in 1:A_len
-      append!(edges, [(i,i+A_len)])
-    end
-
-    Query(A, A, domain, codomain, [],
-          fields,
-          edges)
+  id(A::Ports) = begin
+    Query(id(A))
   end
 
-  braid(A::Types, B::Types) = begin
-    A_len = length(A.types)
-    B_len = length(B.types)
-    tot_len = A_len + B_len
-
-    domain   = collect(1:(tot_len))
-    codomain = collect((tot_len+1):((tot_len)*2))
-
-    fields = fill((0,"*"),(tot_len)*2)
-
-    edges = Array{Tuple{Int,Int},1}()
-    for i in 1:length(domain)
-      if i > A_len
-        append!(edges, [(i,i-A_len + tot_len)])
-      else
-        append!(edges, [(i,i+B_len + tot_len)])
-      end
-    end
-
-    Query(otimes(A,B), otimes(B,A), domain, codomain, [],
-          fields, edges)
+  braid(A::Ports, B::Ports) = begin
+    Query(braid(A,B))
   end
 
-  mcopy(A::Types) = begin
-    A_len = length(A.types)
-    domain   = collect(1:A_len)
-    codomain = collect((A_len+1):(A_len*3))
-
-    edges = Array{Tuple{Int,Int},1}()
-    for i in 1:length(domain)
-      append!(edges, [(i,i+A_len),(i,i+A_len*2)])
-    end
-
-    fields = fill((0,"*"),A_len*3)
-
-    Query(A, otimes(A,A), domain, codomain, [],
-          fields, edges)
+  mcopy(A::Ports) = begin
+    Query(implicit_mcopy(A,2))
   end
 
-  mmerge(A::Types) = begin
-    dagger(mcopy(A))
+  mmerge(A::Ports) = begin
+    Query(implicit_mmerge(A,2))
   end
 
-  delete(A::Types) = begin
-    A_len = length(A.types)
-    domain   = collect(1:A_len)
-    codomain = Array{Int,1}()
-
-    fields = fill((0,"*"),A_len)
-    edges = Array{Tuple{Int,Int},1}()
-
-    Query(A, munit(Types), domain, codomain, [],
-          fields, edges)
+  delete(A::Ports) = begin
+    Query(delete(A))
   end
 
-  create(A::Types) = begin
-    dagger(delete(A))
+  create(A::Ports) = begin
+    Query(create(A))
   end
 end
 
