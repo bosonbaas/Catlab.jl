@@ -20,8 +20,8 @@ sql(s::Schema) = begin
   primitives = map(s.types) do t
 
     # if our type is primitive, just use the SQL type
-    if typeof(t.args[1]) <: DataType
-      return "-- primitive type $(TypeToSql[t.args[1]]);"
+    if typeof(t.args[1][2]) <: DataType
+      return "-- primitive type $(TypeToSql[t.args[1][2]]);"
     end
 
     # else construct a composite type
@@ -47,8 +47,8 @@ sql(s::Schema) = begin
         group_units = map(enumerate(a.args)) do (j, unit)
 
           name = names[j]
-          if isa(unit.args[1], DataType)
-            return " $name $(TypeToSql[unit.args[1]])"
+          if isa(unit.args[1][2], DataType)
+            return " $name $(TypeToSql[unit.args[1][2]])"
           end
 
           unit_name = unit.args[1][1]
@@ -62,8 +62,8 @@ sql(s::Schema) = begin
       name = t.args[1].fields[i]
 
       # for primitive types, we can just include them in the table directly
-      if isa(a.args[1], DataType)
-        return " $name $(TypeToSql[a.args[1]])"
+      if isa(a.args[1][2], DataType)
+        return " $name $(TypeToSql[a.args[1][2]])"
       end
 
       col = a.args[1][1]

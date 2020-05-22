@@ -3,20 +3,21 @@ module QueryLib
 export Ports, Query, make_query,
   Ob, Hom, dom, codom, compose, ⋅, ∘, id, otimes, ⊗, munit, braid, σ,
   dagger, dunit, dcounit, mcopy, Δ, delete, ◊, mmerge, ∇, create, □,
-  meet, top, to_sql#, plus, zero, coplus, cozero,  join, bottom
+  meet, top, to_sql, FreeBicategoryRelations
+  #, plus, zero, coplus, cozero,  join, bottom
 
 using Catlab, Catlab.Doctrines, Catlab.Present, Catlab.WiringDiagrams
 import Catlab.Doctrines:
   Ob, Hom, dom, codom, compose, ⋅, ∘, id, otimes, ⊗, munit, braid, σ,
   dagger, dunit, dcounit, mcopy, Δ, delete, ◊, mmerge, ∇, create, □,
-  plus, zero, coplus, cozero, meet, top, join, bottom, distribute_dagger
+  plus, zero, coplus, cozero, meet, top, join, bottom, distribute_dagger,
+  FreeBicategoryRelations
 
 using AutoHashEquals
-using LightGraphs, MetaGraphs
 import Schema.Presentation: Schema, TypeToSql
 
 @auto_hash_equals struct Types
-  types::Array{Symbol,1}
+  ports::Ports
 end
 
 """ Query
@@ -36,93 +37,133 @@ This structure holds the relationship graph between fields in a query
                                     tables
 """
 struct Query
-  tables::Dict{Symbol, Tuple(Array{String,1}, Array{String,1})}
+  tables::Dict{Symbol, Tuple{Array{String,1}, Array{String,1}}}
   wd::WiringDiagram
 end
 
 Query(wd::WiringDiagram)::Query = begin
-  n_table = Dict{Symbol, Tuple(Array{String,1}, Array{String,1})}()
+  n_table = Dict{Symbol, Tuple{Array{String,1}, Array{String,1}}}()
   Query(n_table, wd)
+end
+
+struct Vertex
+  name::Symbol
+  is_dagger::Bool
+  is_junc::Bool
 end
 
 function to_sql(q::Query)::String
 
   ind_to_alias(i) = "t$i"
   wd = q.wd
+  tables = q.tables
 
   # Get the vertices as (name, is_dagger, is_junc)
-  struct Vertex
-    name::Symbol
-    is_dagger::Bool
-    is_junc::Bool
-  end
+  verts = fill(Vertex(:*,false,false),nboxes(wd)+2)
+  verts[1] = Vertex(:input,false,true)
+  verts[2] = Vertex(:output,false,true)
 
-  verts = fill(Vertex(:*,false,false),nv(wd.graph))
-  verts[1] = Vertex(:input,false,false)
-  verts[2] = Vertex(:output,false,false)
+  for k in box_ids(wd)
+    v = box(wd, k)
 
-  for (k,v) in boxes(wd)
     is_junc   = false
     is_dagger = false
     name      = :*
     if typeof(v) <: Junction
-      vert.is_junc = true
+      is_junc = true
     elseif typeof(v) <: BoxOp{:dagger}
-      vert.is_dagger = true
-      vert.name = v.box.value
+      is_dagger = true
+      name = v.box.value
     else
-      vert.name = v.value
+      name = v.value
     end
     verts[k] = Vertex(name, is_dagger, is_junc)
   end
 
   # Make the join statement
-  alias_array = Array{String,1}
+  alias_array = Array{String,1}()
   for v in box_ids(wd)
-    cur_b = vert[v]
+    cur_b = verts[v]
     name = string(cur_b.name)
     if !cur_b.is_junc
-      append!(alias_array, ["$name AS $(ind_to_alias(v))"])
+      push!(alias_array, "$name AS $(ind_to_alias(v))")
+    end
   end
 
   # Make the relation statement
-  relation_array = Array{String,1}
-  dom_array   = fill("", length(wd.input_ports))
-  codom_array = fill("", length(wd.output_ports))
-  for e in wires(wd)
-    if e.source.box == 1
-      db = e.target.box
-      dp = e.target.port
-      df = tables[verts[db].name][dp]
-      dom_array[e.source.port] = "$(ind_to_alias(db)).$df"
-    end
-    if e.target.box == 2
-      sb = e.source.box
-      sp = e.source.port
-      sf = tables[verts[sb].name][sp]
-      codom_array[e.target.port] = "$(ind_to_alias(sb)).$sf"
-    end
+  relation_array = Array{String,1}()
 
+  # Neighbors will keep track of connections to junction nodes
+  neighbors = fill((Array{String,1}(),Array{String,1}()), length(verts))
+
+  neighbors[1] = (Array{String,1}(),fill("", length(wd.input_ports)))
+  neighbors[2] = (fill("", length(wd.output_ports)),Array{String,1}())
+  for i in 3:length(neighbors)
+    if verts[i].is_junc
+      neighbors[i] = ([""],[""])
+    else
+      neighbors[i] = (fill("",length(tables[verts[i].name][1])),
+                      fill("",length(tables[verts[i].name][2])))
+    end
+  end
+
+  for e in wires(wd)
     sb = e.source.box
     sp = e.source.port
-    sf = tables[verts[sb].name][1][sp]
-    if verts[sb].is_dagger
-      sf = tables[verts[sb].name][2][sp]
-    end
-    src = "$(ind_to_alias(sb)).$sf"
-
     db = e.target.box
     dp = e.target.port
-    df = tables[verts[db].name][2][dp]
-    if verts[db].is_dagger
-      df = tables[verts[db].name][1][dp]
-    end
-    dst = "$(ind_to_alias(db)).$df"
+    src = ""
+    dst = ""
 
-    if dst*"="*src in relation_array or src*"="*dst in relation_array
+    if verts[sb].is_junc && verts[db].is_junc
       continue
-    append!(relation_array, [src*"="*dst])
+    elseif verts[sb].is_junc
+      df = tables[verts[db].name][1][dp]
+      if verts[db].is_dagger
+        df = tables[verts[db].name][2][dp]
+      end
+      if neighbors[sb][2][sp] == ""
+        neighbors[sb][2][sp] = "$(ind_to_alias(db)).$df"
+        continue
+      else
+        src = neighbors[sb][2][sp]
+        dst = "$(ind_to_alias(db)).$df"
+      end
+    elseif verts[db].is_junc
+      sf = tables[verts[sb].name][2][sp]
+      if verts[sb].is_dagger
+        sf = tables[verts[sb].name][1][sp]
+      end
+      if neighbors[db][1][dp] == ""
+        neighbors[db][1][dp] = "$(ind_to_alias(sb)).$sf"
+        continue
+      else
+        src = neighbors[db][1][dp]
+        dst = "$(ind_to_alias(sb)).$sf"
+      end
+    else
+      sf = tables[verts[sb].name][2][sp]
+      if verts[sb].is_dagger
+        sf = tables[verts[sb].name][1][sp]
+      end
+      src = "$(ind_to_alias(sb)).$sf"
+
+      df = tables[verts[db].name][1][dp]
+      if verts[db].is_dagger
+        df = tables[verts[db].name][2][dp]
+      end
+      dst = "$(ind_to_alias(db)).$df"
+    end
+
+    if dst*"="*src in relation_array || src*"="*dst in relation_array
+      continue
+    end
+    push!(relation_array, src*"="*dst)
   end
+
+  # The only important junction nodes are the input/output nodes
+  dom_array = neighbors[1][2]
+  codom_array = neighbors[2][1]
 
   select = "SELECT "*join(vcat(dom_array, codom_array), ", ")*"\n"
   from = "FROM "*join(alias_array, ", ")*"\n"
@@ -131,11 +172,11 @@ function to_sql(q::Query)::String
   return select*from*condition
 end
 
-@instance BicategoryRelations(Ports{BicategoryRelations.Hom, Symbol}, Query) begin
+@instance BicategoryRelations(Types, Query) begin
 
-  dom(f::Query)   = input_ports(Ports, f.wd)
-  codom(f::Query) = output_ports(Ports, f.wd)
-  munit(::Type{Ports}) = Ports{BicategoryRelations.Hom, Symbol}([])
+  dom(f::Query)   = input_ports(Types, f.wd)
+  codom(f::Query) = output_ports(Types, f.wd)
+  munit(::Type{Types}) = Types(Ports([]))
 
   compose(f::Query, g::Query) = begin
     n_tables = merge(f.tables, g.tables)
@@ -143,7 +184,7 @@ end
     return Query(n_tables, n_wd)
   end
 
-  otimes(A::Ports, B::Ports) = otimes(A,B)
+  otimes(A::Types, B::Types) = Types(otimes(A.ports,B.ports))
   otimes(f::Query, g::Query) = begin
     n_tables = merge(f.tables, g.tables)
     n_wd = otimes(f.wd, g.wd)
@@ -158,65 +199,56 @@ end
 
   dagger(f::Query) = Query(f.tables, dagger(f.wd))
 
-  dunit(A::Ports) = begin
-    Query(dunit(A))
+  dunit(A::Types) = begin
+    Query(dunit(A.ports))
   end
 
-  top(A::Ports, B::Ports) = begin
-    Query(top(A,B))
+  top(A::Types, B::Types) = begin
+    Query(top(A.ports,B.ports))
   end
 
-  dcounit(A::Ports) = begin
-    Query(dcounit(A))
+  dcounit(A::Types) = begin
+    Query(dcounit(A.ports))
   end
 
-  id(A::Ports) = begin
-    Query(id(A))
+  id(A::Types) = begin
+    Query(id(A.ports))
   end
 
-  braid(A::Ports, B::Ports) = begin
-    Query(braid(A,B))
+  braid(A::Types, B::Types) = begin
+    Query(braid(A.ports,B.ports))
   end
 
-  mcopy(A::Ports) = begin
-    Query(implicit_mcopy(A,2))
+  mcopy(A::Types) = begin
+    Query(implicit_mcopy(A.ports,2))
   end
 
-  mmerge(A::Ports) = begin
-    Query(implicit_mmerge(A,2))
+  mmerge(A::Types) = begin
+    Query(implicit_mmerge(A.ports,2))
   end
 
-  delete(A::Ports) = begin
-    Query(delete(A))
+  delete(A::Types) = begin
+    Query(delete(A.ports))
   end
 
-  create(A::Ports) = begin
-    Query(create(A))
+  create(A::Types) = begin
+    Query(create(A.ports))
   end
 end
 
 make_query(s::Schema, q::GATExpr)::Query = begin
 
   # Keep the type names associated to consistent Types objects
-  type_to_field = Dict{String,Types}()
+  new_type = Dict{FreeBicategoryRelations.Ob,FreeBicategoryRelations.Ob}()
 
   # Generate Types objects from object description
   q_types = map(s.types) do t
 
-    # If our type is primitive, just use the SQL type
-    if typeof(t.args[1]) <: DataType
-      type_name    = TypeToSql[t.args[1]]
-      fields  = [Array{String,1}()]
-      type_to_field[type_name] = Types([type_name], fields)
-      return type_to_field[type_name]
-    end
-
-    # Otherwise, we use the symbol name and keep track of fields
-    components = t.args[1][2]
-    type_name = string(t.args[1][1])
-    fields = [TypeToSql[components[k]] for k in keys(components)]
-    type_to_field[type_name] = Types([type_name], [fields])
-    return type_to_field[type_name]
+    # Symbol name is used for type
+    sym = t.args[1][1]
+    A = Ob(FreeBicategoryRelations, sym)
+    new_type[t] = A
+    return Types(to_wiring_diagram(new_type[t]))
   end
 
   # Generate the Query objects from hom descriptions
@@ -235,19 +267,11 @@ make_query(s::Schema, q::GATExpr)::Query = begin
     if typeof(types) <: Catlab.Doctrines.FreeBicategoryRelations.Ob{:otimes}
       dom_name = names
       dom_type = map(types.args) do cur_t
-        if isa(cur_t.args[1], DataType)
-          return type_to_field[TypeToSql[cur_t.args[1]]]
-        else
-          return type_to_field[string(cur_t.args[1][1])]
-        end
+        return new_type[cur_t]
       end
     else
       dom_name = [names]
-      if typeof(types.args[1]) <: DataType
-        dom_type = [type_to_field[TypeToSql[types.args[1]]]]
-      else
-        dom_type = [type_to_field[string(types.args[1][1])]]
-      end
+      dom_type = [new_type[types]]
     end
 
     names = t.args[1].fields[2]
@@ -256,35 +280,18 @@ make_query(s::Schema, q::GATExpr)::Query = begin
     if typeof(types) <: Catlab.Doctrines.FreeBicategoryRelations.Ob{:otimes}
       codom_name = names
       codom_type = map(types.args) do cur_t
-        if isa(cur_t.args[1], DataType)
-          return type_to_field[TypeToSql[cur_t.args[1]]]
-        else
-          return type_to_field[string(cur_t.args[1][1])]
-        end
+        return new_type[cur_t]
       end
     else
       codom_name = [names]
-      if typeof(types.args[1]) <: DataType
-        codom_type = [type_to_field[TypeToSql[types.args[1]]]]
-      else
-        codom_type = [type_to_field[string(types.args[1][1])]]
-      end
+      codom_type = [new_type[types]]
     end
 
-    tables = [String(t.args[1].name)]
-    join_names = vcat(dom_name, codom_name)
 
-    # Generate the fields array
-    fields = Array{Tuple{Int,String},1}()
-    for i in 1:length(join_names)
-      append!(fields,[(1,join_names[i])])
-    end
+    tables = Dict(t.args[1].name => (dom_name, codom_name))
 
-    dom_names   = collect(1:length(dom_name))
-    codom_names = collect((1+length(dom_name)):length(join_names))
-
-    Query(otimes(dom_type), otimes(codom_type),
-          dom_names, codom_names, tables, fields,[])
+    hom = Hom(t.args[1].name, otimes(dom_type), otimes(codom_type))
+    Query(tables, to_wiring_diagram(hom))
   end
 
   d = Dict()
