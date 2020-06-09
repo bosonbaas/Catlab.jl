@@ -7,8 +7,8 @@ import Schema.Presentation: Schema, sql
 # Define the Types
 Name = Ob(FreeBicategoryRelations, (:full_name, (first=String, last=String)))
 Person = Ob(FreeBicategoryRelations, (:person, (id=Int,)))
-X = Ob(FreeBicategoryRelations, Int)
-F = Ob(FreeBicategoryRelations, Float64)
+X = Ob(FreeBicategoryRelations, (:X, Int))
+F = Ob(FreeBicategoryRelations, (:F, Float64))
 ID = Ob(FreeBicategoryRelations, (:ID, (id=Int,)))
 
 # Define the relationships
@@ -64,7 +64,7 @@ println("Copy the following to generate run the query:")
 #formula = dagger(name)⋅mcopy(Person)⋅((salry⋅dagger(salry))⊗(manag⋅dagger(manag)))⋅mmerge(Person)⋅name
 
 # Customer/employee relationship between employee and their manager
-formula = dagger(name)⋅mcopy(Person)⋅(id(Person)⊗manag)⋅e_cust_conn
+formula = mcopy(Person)⋅(id(Person)⊗manag)⋅e_cust_conn
 query(f) = to_sql(make_query(schema, f))
 
 println(query(formula))
